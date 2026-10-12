@@ -3,11 +3,11 @@
 分析-数据检查（只读诊断，不打模型）
 用途: 采集数据快速体检 —— M1 首批复核 / 协议校准依据 (README §4)
   - 试次数/错误率 + 错误类型分布 (记录列 err_type: R1 键序 / R2 失同步 / R3 提前击 / R4 缺键)
-  - 词当量 wc = max_h(S1+S2+S3) + 三段分量 S1/S2/S3 (v2.6 口径, README §3.3)
+  - 词当量 wc = max_h(S1+S2+S3) + 三段分量 S1/S2/S3 (v2.6 口径, README §4.1)
   - 1 击行孤立 occ/spread (模型 A 基线 + 上文效应对照)
   - 击内散布 ld-fd (按手内键数分组, 校准 T_SYNC 依据)
   - 门控校验 fd2 >= lu1 (单手行: 本手释放后才有本手下一击)
-注: 双手 (both) 采集与相关校验已于 2026-09-07 移除 (README §4.1)
+注: 双手 (both) 采集与相关校验已于 2026-09-07 移除 (README §3.2)
 用法: python 分析-数据检查.py [数据文件.tsv]
 """
 import sys
@@ -58,7 +58,7 @@ def main(path):
     if n_read or n_mot:
         print(f"  读取型(R1) {n_read} ({n_read/(n_read+n_mot):.0%}) vs "
               f"运动型(R2-R4) {n_mot} ({n_mot/(n_read+n_mot):.0%})"
-              f"  ← 当量默认不含错误项, 且语义上只有运动型相关（README §3.5）")
+              f"  ← 当量默认不含错误项, 且语义上只有运动型相关（README §4.2）")
     if errs and all(not r.get("err_type") for r in errs):
         print("  ⚠ 该文件无 err_type 列 (旧格式): 无法复原错误类型")
 
@@ -95,7 +95,7 @@ def main(path):
         print(f"\n1 击行 (孤立角色): occ med={pct(one_occ,0.5):.0f} p90={pct(one_occ,0.9):.0f}ms | "
               f"spread med={pct(one_spr,0.5):.0f} p90={pct(one_spr,0.9):.0f}ms  (n={len(one_occ)})")
 
-    # v2.6 三段口径按手统计 (README §3.3): S1 词首占用 / S2 换手间隙 / S3 词尾占用
+    # v2.6 三段口径按手统计 (README §4.1): S1 词首占用 / S2 换手间隙 / S3 词尾占用
     stats = defaultdict(list)          # 结构 → [wc = max_h(S1+S2+S3)]
     seg_stats = defaultdict(list)      # 段名 → 值
     spreads = defaultdict(list)
@@ -144,10 +144,10 @@ def main(path):
         print(f"  {'左' if key[0]=='l' else '右'}手{key[1]}键  n={len(v):3d}  "
               f"med={pct(v,0.5):5.0f}  p90={pct(v,0.9):5.0f}  max={max(v):5.0f}")
 
-    # 双手 (both) 相关校验已于 2026-09-07 随 both 采集移除 (README §4.1):
-    #   起手异步 / 闸门抬高量的实测校验不再可行 —— 闸门感知合成 (§3.3) 由引擎语义
+    # 双手 (both) 相关校验已于 2026-09-07 随 both 采集移除 (README §3.2):
+    #   起手异步 / 闸门抬高量的实测校验不再可行 —— 闸门感知合成 (§4.1) 由引擎语义
     #   (全放才输出) 必然导出, 属结构项而非经验校正; 其"被挡手是否在闸门后立即按键"
-    #   的吸收度不可测, 合成对该情形取**下界**方向 (只可能低估) —— 记于 README §8。
+    #   的吸收度不可测, 合成对该情形取**下界**方向 (只可能低估) —— 记于 README §6.2。
 
     hv = [h for _, _, h in holds]
     print(f"\nhold 时长 lu-ld (ms): med={pct(hv,0.5):.0f}  p90={pct(hv,0.9):.0f}  max={max(hv):.0f}")

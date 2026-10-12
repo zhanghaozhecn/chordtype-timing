@@ -3,7 +3,7 @@
 分析-难度剔除.py — 组合判定 → 动态维护 组合排除表.txt (两个判据, 分段写表)
 
 判据 A · `--judge difficulty` (默认): 上下文/段位综合的**难度异常**判定
-设计依据 (README §4.5; 2026-09-07 上下文本位 + 2026-09-24 三角色综合):
+设计依据 (README §4.4; 2026-09-07 上下文本位 + 2026-09-24 三角色综合):
 
   · **一击必须参与** (2026-09-24 用户决策): 孤立位置 = 一击词/一级字/简词的真实用法,
     其难度对方案同样相关 → 角色 = iso (1 击试次) / S1 (词首) / S3 (词尾),
@@ -18,7 +18,7 @@
       ① 综合层 (主): med 配对 log 比 (权重含 1:2 重要性) > margin(n_eff) 且 n_eff ≥ n_min
       ② 角色特异层 (辅): 某角色 med > margin(n_role)×同角色参考 且 n_role ≥ n_min_role
          (mode=either 任一角色即可 / both 需 ≥2 个角色) —— 兜住"只在某个段位特别难"的组合
-  · **阈值必须自适应** (README §8-6): 固定 margin=1.0 在零假设下恒约 50% 越线, 不是判据;
+  · **阈值必须自适应** (README §6.2-6): 固定 margin=1.0 在零假设下恒约 50% 越线, 不是判据;
     margin(n) = 1 + z·1.253σ/√n (z=3.46 ⇒ 189 判定单元族错误率 ≈5%; σ 由窗口内数据估计)。
     显式给 --margin <float> 可强制固定阈值 (仅作对照, 不推荐)。
   · **参考水平 = 同角色、同键数的组合总体中心** (--ref pooled 默认, 2026-09-30 起判定不依赖 sdf),
@@ -1028,7 +1028,7 @@ def main():
     old_sec = set(secs[args.judge])
     if args.judge == "quota":
         head = [
-            "# 组合排除表 — 自动条目由 分析-难度剔除.py 生成 (判据 B ② 硬剔; README §4.5)",
+            "# 组合排除表 — 自动条目由 分析-难度剔除.py 生成 (判据 B ② 硬剔; README §4.4)",
             f"# 判据 B (quota) 单手 ≤{QUOTA_MAX_CODES} 码位: {SINGLES_PER_HAND} 单键默认全留 + 双键保留 "
             f"{args.quota} (共 {TWO_KEY_PER_HAND}); 排序量 = occ (整击耗时), 同角色参考配对 + 1:2 权重",
             (f"# 本段 = **确定出局** (② 支配者 ≥ {args.dominators}) ⇒ 硬剔, **不可逆**; "
@@ -1040,7 +1040,7 @@ def main():
         ]
     else:
         head = [
-            "# 组合排除表 — 自动条目由 分析-难度剔除.py 生成 (判据 A 难度异常; 同角色同键数组合总体中心, README §4.5)",
+            "# 组合排除表 — 自动条目由 分析-难度剔除.py 生成 (判据 A 难度异常; 同角色同键数组合总体中心, README §4.4)",
             f"# 判据 A (difficulty): ①综合比值 > 阈值 且 n_eff≥{args.n_min} "
             f"(三角色共享击内效应, 段位效应配对抵消) ②角色特异 (n≥{args.n_min}/iso {args.n_min_iso}, "
             f"mode={args.mode})",
@@ -1065,7 +1065,7 @@ def main():
     if args.judge == "quota":                       # ③ 降权表 (总是重写 ⇒ 上一轮降权自动撤销)
         old_w, manual_w = read_weights(WEIGHT_TXT)
         whead = [
-            "# 组合降权表 — 由 分析-难度剔除.py --judge quota 生成 (判据 B ③ 软降权; README §4.5)",
+            "# 组合降权表 — 由 分析-难度剔除.py --judge quota 生成 (判据 B ③ 软降权; README §4.4)",
             f"# 语义: 疑似出局 (未确定) → 采样权重 ×系数 ({args.soft_weight:g}); 权重 1 = 不降权; "
             f"**要硬剔请写 组合排除表.txt** (本表不剔任何组合)",
             f"# 疑似 = 严格割线 (n_eff ≥ {args.n_min}) ∪ 宽松割线 (n_eff ≥ {args.soft_n_min}) ∪ "
@@ -1089,7 +1089,7 @@ def main():
 def _synth(spec, n_per_combo, ref_boost, sigma, seed=11, mus=120.0, role_effects=None,
            occ_spec=None, mus_occ=120.0, sigma_occ=0.19):
     """合成 left 手数据行。spec[(combo, role)] = 真实 log 效应 (组合效应, 三角色相同)。
-    role_effects = 段位效应 (真实数据实测: 孤立/S1/S3 = −0.29/0/+0.39, 见 §8-6)。
+    role_effects = 段位效应 (真实数据实测: 孤立/S1/S3 = −0.29/0/+0.39, 见 §6.2-6)。
     n_per_combo = {"iso":…, "two":…} 每组合目标样本数 (iso 用 1 击行; two 用 2 击行 → S1+S3 各一)
     ref_boost = {role: 倍数} 锚的加权 (与真实采样器一致: 参考被加权, 且**各角色配比与普通组合
                 不同** —— 这正是"直接合并有偏、必须同角色配对"的成因)
@@ -1158,7 +1158,7 @@ def selftest(args):
     # 段位效应 = 真实数据实测 (孤立 6.5 / S1 8.7 / S3 12.9 ms → log 偏移), 不是假设值
     ROLE_EFF = {"iso": math.log(6.5 / 8.7), "S1": 0.0, "S3": math.log(12.9 / 8.7)}
     # 每组合样本数刻意取在 n_min 之上 (角色层要求每个角色各自达标; 若卡在门槛上,
-    # 一半组合会因"角色样本不足"而不可判 —— 那是**覆盖度**限制, 已在 README §8-6 定量)
+    # 一半组合会因"角色样本不足"而不可判 —— 那是**覆盖度**限制, 已在 README §6.2-6 定量)
     n_per_combo = {"iso": 14, "two": 30}
     ref_boost = {"iso": 1.5, "S1": 2.5, "S3": 4.0}      # (仅合成用) sdf 的段位配比刻意与普通组合不同
     base = dict(n_min=20, n_min_iso=10, metric="spread", margin=None, mode="either",

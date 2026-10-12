@@ -2,7 +2,7 @@
 """
 并击公共.py — 分析脚本共用口径 (口径唯一来源, 防止脚本间漂移)
 含: TSV 读取 / 分段量提取 / 序号块稳定期边界 / 分位 / 参考组合 / 拼读并击在用组合表
-口径定义见 README §3.3（三段）、§5（稳定期）、§4.5（剔除）
+口径定义见 README §4.1（三段）、§5（稳定期）、§4.4（剔除）
 """
 from pathlib import Path
 import math
@@ -12,7 +12,7 @@ BASE = Path(__file__).parent
 LEFT, RIGHT = 'qwertasdfgzxcvb', 'yuiophjkl;nm,./'
 LEFT_SET, RIGHT_SET = set(LEFT), set(RIGHT)
 
-# ── 键盘几何与组合空间 (口径唯一来源: 采集/分析脚本共用; 约束①② 见 README §3.4) ──
+# ── 键盘几何与组合空间 (口径唯一来源: 采集/分析脚本共用; 约束①② 见 README §4.1) ──
 import itertools
 ROWS = ['qwertyuiop', 'asdfghjkl;', 'zxcvbnm,./']
 KEY_POS = {c: (r, i) for r, row in enumerate(ROWS) for i, c in enumerate(row)}
@@ -39,7 +39,7 @@ REF_COMBO = {'l': 'sdf', 'r': 'jkl'}
 LEFT_COMBOS.append(REF_COMBO['l'])
 RIGHT_COMBOS.append(REF_COMBO['r'])                  # → 各 79 (78 + 1 三键)
 
-# 击结构 (|左|,|右|) 采样权重 — 近似实用击型分布 (README §4.2)
+# 击结构 (|左|,|右|) 采样权重 — 近似实用击型分布 (README §4.4)
 SIZE_WEIGHTS = {(1,1):24, (1,2):18, (2,1):16, (2,2):22, (1,0):10, (2,0):6, (0,1):8, (0,2):2}
 # 单键:双键:三键 结构权重 (三键 = REF_COMBO, 2026-09-30 起不加权)
 COMBO_W = {1: 2.0, 2: 1.0, 3: 1.0}
@@ -58,7 +58,7 @@ def sample_stroke(rng):
     R = rng.choice(_RIGHT_BY_SIZE[nr]) if nr else ''
     return L, R
 
-# 稳定期边界方法常量 (移植自 击键测速 §5.1 序号块口径)
+# 稳定期边界方法常量 (口径移植自姊妹项目串击 `better-keystroke-timing` 的序号块口径)
 BLOCK, BAND, REF_LAST, SMOOTH, MIN_BLOCKS = 100, 1.10, 5, 3, 8
 # 稳定期边界判据 = **平台中心包络**（2026-10-11 用户决策, 移植自姊妹项目串击同日决策
 # 「稳定期边界改用与水平解耦的判据」）: 上沿 = median(平台平滑值) + NSIG·1.4826·MAD(平台平滑值),
@@ -69,7 +69,7 @@ BLOCK, BAND, REF_LAST, SMOOTH, MIN_BLOCKS = 100, 1.10, 5, 3, 8
 # {4:1.10, 3:1.10, 2:1.15}, 本项目分类型, 两类暂同带 1.10）。
 NSIG = 3.0                                   # 包络宽度 (平台中心 + 3σ_b; 与串击同值)
 
-# ── 错误成本: 指定常数 (2026-09-24 用户决策, 不再实测; README §3.5) ──────────
+# ── 错误成本: 指定常数 (2026-09-24 用户决策, 不再实测; README §4.2) ──────────
 # 值 = 姊妹项目 击键测速 实测「错误修正时间」净成本 782.2ms (n=278 episode,
 #   产物/错误修正时间-实测值.txt) 的移植锚, 非本机实测。
 # 为什么不自己测 (用户 2026-09-07 判断 + 2026-09-24 定案):
@@ -157,7 +157,7 @@ def trial_type(r):
     return len(parts) if parts else 0
 
 def type_metric(r, hand):
-    """该类型试次的稳定期边界指标 (README §4.6):
+    """该类型试次的稳定期边界指标 (README §3.5):
       1 击 → occ = lu−fd (孤立组合占用)
       2 击 → wc = lu2−fd1 (词占用)
     无效 (错误行/缺锚) → None"""
@@ -181,7 +181,7 @@ def split_by_type(rows, hand):
     return out
 
 def stable_by_type(rows, hand, block=BLOCK, min_blocks=MIN_BLOCKS):
-    """**分类型**稳定期 (混采协议, README §4.6)。两类试次时间尺度不同 → 各自跑边界方法;
+    """**分类型**稳定期 (混采协议, README §3.5)。两类试次时间尺度不同 → 各自跑边界方法;
     少数类样本不足以自成边界时, 按主类的稳定起点**同截归属** (姊妹项目做法:
     少数类型不参与边界计算, 按时间序自稳定起点同截)。
     → {类型: {"method": "own"/"shared"/None, "cut_row": 全局截断行号,
@@ -305,7 +305,7 @@ def pct(v, q):
     v = sorted(v)
     return v[min(len(v) - 1, int(q * len(v)))]
 
-# ═══════════════ 角色 (段位) 模型: 剔除判据的唯一来源 (README §4.5, 2026-09-24) ═══════════════
+# ═══════════════ 角色 (段位) 模型: 剔除判据的唯一来源 (README §4.4, 2026-09-24) ═══════════════
 # 口径: 击内 spread/occ 有**共用部分** (组合本身的成形难度) + **段位效应** (孤立/词首/词尾
 # 的上下文差)。所以不按角色分家, 也不整体合并, 而是: **每个角色内与"同角色参考水平"配对求 log 比
 # ⇒ 段位效应在差值里自动抵消**, 再把各角色的 log 比按权重平均 ⇒ 组合效应可用全部角色的样本。
@@ -409,7 +409,7 @@ def joint_log_ratio(vals, ref_vals, weights=None, min_role_n=MIN_ROLE_N):
     return math.exp(num / den), n_eff, detail
 
 def margin_adaptive(n, sigma, z=Z_FWER):
-    """随样本量自适应的阈值**倍数** (README §4.5/§8-6): 固定 margin=1.0 在零假设下恒约
+    """随样本量自适应的阈值**倍数** (README §4.4/§6.2-6): 固定 margin=1.0 在零假设下恒约
     50% 越线, 不是判据; 阈值必须 >= 中位估计的抽样噪声 ⇒
         margin = exp(z · 1.253σ/√n)      ← **乘性**形式 (log 尺度上是 z·SE)
     (写成 1 + z·SE 是错的: z·SE 大时严重低估阈值 —— 实测误剔数高数倍)
