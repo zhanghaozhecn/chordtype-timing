@@ -1,6 +1,30 @@
 #!/usr/bin/env python3
 """
-并击当量采集工具 v2.48（2 击试次 = 4 码 = 一个二字词）
+并击当量采集工具 v2.50（2 击试次 = 4 码 = 一个二字词）
+v2.50 (2026-10-12 用户决策 "现在双手比例已经追平, 不需要平衡功能了; 用户从头开始采集就只保留
+                    双手混采模式, 不设计仅单手采集"): **抽边改成每试次独立 50/50（无状态）** ——
+                    删掉 v2.22 起的"欠账增补"平衡机制: `hand_probability()` + 常量
+                    (`HAND_TARGET`/`HAND_CATCHUP`/`HAND_MAX_SKEW`/`HAND_COUNT_OK_ONLY`)、
+                    `load_hand_totals()`、`self.hand_totals` 与 `_record` 里的累加、启动报告的
+                    "已采 左 n : 右 m"那一行。**理由**: ① 平衡机制是为"两手历史欠账"设的, 现在
+                    比例已追平 ⇒ 无事可做; ② 新用户从头采时, 每试次独立 50/50 的累计比例**自然**
+                    收敛到 1:1（4000 试次 ±1.6%）, 不需要强制; ③ **抽边无状态** ⇒ 不再依赖任何历史计数
+                    （组合多样性仍按覆盖计数 —— 但那是组合层, 与手别无关）。**保留**: ① **无固定单手模式**（用户
+                    明确"不设计仅单手采集"—— 手只能由 `choose_hand` 随机抽, 无 CLI/GUI 开关）;
+                    ② 两侧始终交错（50/50 的概率性质: 20 试次全同侧 ≈ 2e-6）⇒ 练习效应对称;
+                    ③ 手内协议一条不动（混采 1:4、结构权重、1/(n+1) 多样性、降权系数, 各手独立池）。
+                    **数据侧零改动**（22 列/门控/计时/稳定期全部不变）; `--selftest` 的增补断言改为
+                    "4000 试次 50/50 累计比例 ±3% + 每个 20 试次窗口两侧都出现"; `--smoke` 的
+                    "采样侧计数不减"改为"覆盖计数仍在 + 平衡符号确不存在"。
+v2.49 (2026-10-12 用户决策 "去掉当前已采集样本总数行, 让用户专心采集"): **界面只剩 `Trial N` 一行** ——
+                    删掉 v2.44 的顶部证据量计数行 `左 成功/样本 : 右 成功/样本`。**连带删除**
+                    （它们**只服务那一行显示**）: `scan_hand_counts()`、`self.hand_counts`、
+                    `label_hands`、`_update_hand_counts()`，以及 `_record` 里"每落一行在内存累加"三行。
+                    **采样侧不变**: `hand_pairs`/`hand_singles`（采样覆盖）与 `_write_header` 照旧 ——
+                    它们从来不上屏（⚠ 曾同时提到的 `hand_totals` 欠账计数已于 **v2.50** 随平衡功能删除）。
+                    窗口高度由内容自适应（`_fit_geometry` 读 `winfo_reqheight`, 无需改常数）⇒ 比 v2.44 矮一行。
+                    **数据侧零改动**（22 列/门控/计时不动）; `--smoke` 把原 ⑤ 块改为"已删除字段与函数
+                    必须真的不存在"（防回潮），并保留"采集量只认数据文件"这条口径（改用文件本身核对）。
 v2.48 (2026-10-12 用户要求"同步增加该功能"): **补上 `--no-ime` 排障开关** —— 与姊妹项目
                     `../串击击键当量/采集输入层.py` 的 `--no-ime` 同义: 整体关掉输入层
                     (`ime=False` ⇒ 不摘除、不重摘、不起周期任务) ⇒ **回到修复前行为**
@@ -34,23 +58,25 @@ v2.47 (2026-10-12 用户决策 "去掉钩子层, 只保留摘除窗口 IME"): **
                     **数据侧零改动**（22 列/门控/计时实现口径不动）。
 v2.45 (2026-10-12 用户决策 "用法单独写一个说明书…放一个问号图标, 点击可以展开说明; 界面里就不需要
                     第一击圈/第二击叉这一行了; 只保留当前 trial 序号和总样本数信息这两行"):
-                    **说明书独立成文 + 界面只剩两行字** ——
+                    **说明书独立成文 + 界面只剩计数与试次号**（当时 = 两行; 顶部那行已由 v2.49 删除）——
                     ① **`采集器说明书.md`**（项目根, 独立文档）: 圈/叉记法（哪一击是圈、哪一击是叉、
-                       共有键画什么）、两行信息的含义、按键与错误码、数据落点、常见问题、启动开关;
+                       共有键画什么）、信息行的含义、按键与错误码、数据落点、常见问题、启动开关;
                     ② **右上角 `?` 图标**（小圆圈 + "?", 与键位图同为"圆"的语言）→ 点击**展开/收起**
                        说明书抽屉（`tk.Text` + 滚动条, 17 行高）; 展开/收起都调 `_fit_geometry()` 让窗口
                        自适应; **首次展开才读盘**; 读不到文件 → 面板里**明说路径**（不静默空着）;
                        渲染 = 极简 Markdown（只认 `#` 标题 / `-`·`*` 列表 / 空行, 去掉 `**` 与反引号,
                        刻意不做完整解析 —— 语法扩展也不会让显示失真）;
                     ③ **删掉图例行**（"第 1 击 ○ → 第 2 击 ✕"）: 记法说明已收进说明书 ⇒ 界面上只剩
-                       **顶部 `左 成功/样本 : 右 成功/样本`**（v2.44）+ **底部 `Trial N`**（v2.41）
-                       这两行字; `_sync_legend` / `legend*` 全部删除（`--split` 两块图各自的
+                       底部 `Trial N`（v2.41；当时还有 v2.44 加的顶部计数行 —— 该行已由 v2.49 删除）;
+                       `_sync_legend` / `legend*` 全部删除（`--split` 两块图各自的
                        "第 1 击/第 2 击"标题保留 —— 那标的是**块**, 不是记法）。
                     **数据侧零改动**; `--smoke` 新增: `?` 默认收起 · 点开/再点收起的展开态与窗口高度 ·
-                    正文来自独立文档且含记法与两行信息的关键词 · Markdown 标记被渲染掉 ·
+                    正文来自独立文档且含记法关键词 · Markdown 标记被渲染掉 ·
                     缺文件明说路径 · 图例相关属性**真的不存在**。
 v2.44 (2026-10-12 用户决策 "界面上方改成左成功数/样本数:右成功数/样本数"): **顶部恢复一行**
-                    (`label_hands`, 显 "左 成功/样本 : 右 成功/样本") —— 与 v2.43 删掉的那三行
+                    (`label_hands`, 显 "左 成功/样本 : 右 成功/样本") —— ⚠ **该行已由 v2.49 删除**
+                    （2026-10-12 用户决策"让用户专心采集"; 计数改从数据文件本身核对）。
+                    与 v2.43 删掉的那三行
                     **不同**: 它不是"给旁观者看的说明书", 而是**只读数据文件的证据量计数**。
                     口径: **成功 = `error=0` 的已落盘行, 样本 = 该手全部已落盘行**;
                     数据源 = `scan_hand_counts(OUT)` **启动现扫 `当量数据.tsv`** + 每落一行在内存
@@ -136,7 +162,8 @@ v2.37 (2026-10-11 用户实测"一击打完后界面卡住不动"): **静默失�
 v2.34 (2026-10-11): **混采比 1击:2击 1:2→1:4（临时档）** —— 加速 gap 段达标（gap 行/天 ×1.5;
                     闭环模拟确认早退协议无法加速后的真杠杆之一）; 回退条件见 MIX_ONE_TWO 注释;
                     数据侧零改动（22 列格式/门控/计时/稳定期分类型计算全部不变）
-v2.22 起: 左右手 1:1 增补混采; v2.23 (2026-10-01): 移除固定单手模式 (只剩随机单手);
+v2.22 起: 左右手 1:1 混采（**v2.22–v2.49 = 欠账增补; v2.50 起 = 每试次独立 50/50, 无状态**）;
+v2.23 (2026-10-01): 移除固定单手模式 (只剩随机单手; 至今仍是唯一模式)
 v2.24 (2026-10-01): **无视输入法** —— 当时 = 低层键盘钩子 (主) + 摘除窗口 IME (回退)
                     (⚠ v2.46 删了进程级 ImmDisableIME、v2.47 删了钩子层 ⇒ 现只剩摘窗口 IME)
 v2.31 (2026-10-04): **半边键盘** —— 只显示采集手那一半 (删基准键标记 + 手分界线)
@@ -182,7 +209,7 @@ v2.33 (2026-10-08): **完成提示只显示时间** —— 一击 `xxms`; 二击
     数据作为副产品; 排除表仍拒绝排除它（保留唯一的 3 键数据点, 通用模型用）。
 
 模式: 左右手 1:1 随机单手混采（唯一模式, 无固定单手开关）[--practice]
-  · 每试次按累计欠账抽边 (`hand_probability`): 先还历史欠账, 之后稳在 1:1, 两侧始终交错
+  · 每试次**独立 50/50** 随机抽边（v2.50: 无欠账、无状态 —— 累计比例自然收敛到 1:1, 两侧交错）
   · 2026-10-01 用户决策: 移除"只左手/只右手"固定模式 —— 方案要求左右对称、练习效应也要对称,
     固定单手会破坏这两条; 单手数据无法参与"双手交集"剔除 (只手无数据 ⇒ 一个都不动)
   正式采集（默认）: 2 击试次（= 4 码 = 一个二字词）, 同手两击, 每击 1-2 键组合。
@@ -238,37 +265,19 @@ REFRESH_EVERY = 200          # 每 N 试次重载组合排除表 (动态剔除�
 CAPTURE_STUCK_S = 5.0        # 错误捕获态静默多久后自动收尾 (秒; v2.38 看门狗, 防永久卡住)
 TRIAL_STUCK_S = 20.0         # 正常试次静默多久后自动收尾 (秒; v2.38 看门狗, 防漏收松开事件)
 
-# ── 左右手 1:1 混采 + **增补** (v2.22, 2026-10-01 用户决策) ────────────────────────
-# 为什么必须同时采两手 (用户): 方案要求左右手可用组合**对称**, 剔除又只能在"两手都差"时动作
-#   ⇒ 右手没有自己的数据就无法判定; 而且**练习效应**要求两手的熟练曲线同期 —— 先采完一手再
+# ── 采集手: 每试次**独立 50/50** 随机抽边（v2.50, 2026-10-12 用户决策）────────────────
+# 为什么同时采两手 (用户 2026-10-01): 方案要求左右手可用组合**对称**, 剔除又只能在"两手都差"时
+#   动作 ⇒ 右手没有自己的数据就无法判定; 而且**练习效应**要求两手的熟练曲线同期 —— 先采完一手再
 #   采另一手, 两手的水平差会混进"手别效应"里, 再也分不开。
-# 机制 (沿用 串击击键当量 的"码长混采": 每试次按比例抽类型 + 各类型独立计数池 +
-#   1/(n+1) 多样性增补) —— 把"类型"从码长换成**手**:
-#   · 基础份额 = HAND_TARGET (1:1), **每试次独立抽** ⇒ 两侧在时间上交错 (练习效应对称)
-#   · **增补**: 累计计数落后的一侧按欠账把概率推高 → 先还清历史欠账, 之后自我纠正局部漂移,
-#     再稳在 1:1。偏置有上下限 ⇒ 落后侧最多 ~82%, 另一侧始终有 ~18% ⇒ 不会退化成单手段。
-#   · 手内一切照旧: 1击:2击 = 1:4 (v2.34 临时档)、结构权重、1/(n+1) 多样性、降权系数 (各手独立计数池)
-#   · v2.23 (2026-10-01 用户决策): **移除"只左手/只右手"固定模式** —— 采集手总是按增补规则
-#     随机抽边 (无 CLI/GUI 开关)。固定单手会让另一手没有同期数据 (练习效应不可比 + 双手交集
-#     永远为空), 与"同时采两手 + 双手交集剔除"直接冲突。
-HAND_TARGET = (1, 1)         # 目标累计 左:右
-HAND_CATCHUP = 400.0         # 增补视野 (试次): 欠账 → 概率偏置 = 欠账/视野 × 0.5
-HAND_MAX_SKEW = 0.32         # 相对 1:1 的最大偏置 ⇒ 单侧概率 ∈ [0.18, 0.82]
-HAND_COUNT_OK_ONLY = True    # 计数只算成功试次 (判据吃的是成功试次 ⇒ 直接对齐证据量)
-
-
-def hand_probability(n_l, n_r, target=HAND_TARGET, catchup=HAND_CATCHUP, skew=HAND_MAX_SKEW):
-    """累计计数 (n_l, n_r) → 下一试次采**右手**的概率 (增补规则; 纯函数, 便于自测)
-    基础份额 ± 欠账偏置, 并夹在 [share−skew, share+skew] = **[0.18, 0.82]** (保证两侧始终交错)。
-
-    ⚠ 2026-10-01 修: 原式写的是 `min(1−skew, max(skew, p))` = [0.32, 0.68] —— 与文档/GUI/启动行
-    声称的 ±0.32 (即 [0.18, 0.82]) 不符, 增补力度只有设计的一半 (右手追平 897 的历史欠账从
-    ~2800 试次拖到 ~5000 试次)。由首轮 v2.24 采集数据的左右比例 (8:9) 复核时发现。"""
-    tl, tr = target
-    share = tr / (tl + tr)
-    exp_r = (n_l + n_r) * share                 # 1:1 时 = 总数/2
-    p = share + (exp_r - n_r) / catchup * 0.5   # 右手欠 ⇒ 推高; 左手欠 ⇒ 压低
-    return min(share + skew, max(share - skew, p))
+# 为什么不再平衡 (用户 2026-10-12 "现在双手比例已经追平, 不需要平衡功能了"):
+#   · 平衡机制(v2.22–v2.49)是为**历史欠账**设的 —— 比例追平后它已无事可做;
+#   · 新用户从头采时, 每试次独立 50/50 的累计比例自然收敛到 1:1（4000 试次 ±1.6%）, 不必强制;
+#   · **抽边无状态** ⇒ 不依赖任何历史计数（组合多样性仍按覆盖计数 —— 但那是组合层, 与手别无关）。
+# 保留: ① **无固定单手模式**（用户明确"不设计仅单手采集"—— 手只能随机抽, 无 CLI/GUI 开关）;
+#       ② 两侧始终交错（50/50 的概率性质: 20 试次全同侧 ≈ 2e-6）⇒ 练习效应对称;
+#       ③ 手内一切照旧: 1击:2击 = 1:4 (v2.34 临时档)、结构权重、1/(n+1) 多样性、降权系数 (各手独立池)
+# v2.23 (2026-10-01 用户决策): **移除"只左手/只右手"固定模式** —— 固定单手会让另一手没有同期数据
+#   (练习效应不可比 + 双手交集永远为空), 与"同时采两手 + 双手交集剔除"直接冲突。
 
 
 # ── 组合空间 / 几何 / 参考组合: 来自共用模块 并击公共.py (口径唯一来源, 勿在此重复定义) ──
@@ -424,27 +433,6 @@ def _left_part(s):
 def _right_part(s):
     return ''.join(c for c in s if c in RIGHT_SET)
 
-def load_hand_totals(path, ok_only=HAND_COUNT_OK_ONLY):
-    """已有数据 → {'l': n, 'r': n} (该手参与过的试次数) —— 左右 1:1 增补用
-    默认只算成功试次 (判据吃成功试次 ⇒ 直接对齐"证据量"; 错误试次两边都扣)"""
-    tot = {'l': 0, 'r': 0}
-    if not Path(path).exists():
-        return tot
-    with open(path, encoding="utf-8") as f:
-        hdr = f.readline().rstrip("\n").split("\t")
-        ci = hdr.index("code") if "code" in hdr else 0
-        ei = hdr.index("error") if "error" in hdr else None
-        for line in f:
-            row = line.strip().split("\t")
-            if len(row) <= ci or not row[ci]:
-                continue
-            if ok_only and ei is not None and len(row) > ei and row[ei] != "0":
-                continue
-            for h, side in (('l', LEFT_SET), ('r', RIGHT_SET)):
-                if any(any(ch in side for ch in s) for s in row[ci].split("|")):
-                    tot[h] += 1
-    return tot
-
 # ── 练习进度持久化 ──
 def load_progress():
     """练习进度 {组合: n}; 兼容旧格式 {组合: {"n":…}}"""
@@ -456,30 +444,6 @@ def load_progress():
 def save_progress(d):
     with open(PRACTICE_JSON, "w", encoding="utf-8") as f:
         json.dump(d, f, ensure_ascii=False, indent=1, sort_keys=True)
-
-def scan_hand_counts(path=None):
-    """扫 `当量数据.tsv` → {手: [成功行数, 样本行数]} (v2.44 顶部计数行的**初值**)
-
-    口径: **文件是唯一真相** (铁律 1) —— 不新建持久计数器 (会与文件漂移), 启动时现扫一遍,
-    之后每落一行在内存里累加。手别取 `code` 首击 (构造上必然单手); `error=0` 记成功。
-    文件不存在/列数不符/组合跨手 的行一律跳过 (不猜)。练习模式写的是 `练习数据.tsv`,
-    不进这个计数 (练习数据不进模型, 铁律 1)。"""
-    cnt = {'l': [0, 0], 'r': [0, 0]}
-    p = Path(path) if path is not None else OUT
-    if not p.exists():
-        return cnt
-    for line in p.read_text(encoding="utf-8").splitlines()[1:]:      # [0] = 表头
-        f = line.split("\t")
-        if len(f) != len(HEADER) or not f[0]:
-            continue
-        first = f[0].split("|")[0]
-        h = 'l' if set(first) <= LEFT_SET else ('r' if set(first) <= RIGHT_SET else None)
-        if h is None:
-            continue
-        cnt[h][1] += 1
-        cnt[h][0] += 1 if f[17] == "0" else 0
-    return cnt
-
 
 class ChordSpeedTest:
     def __init__(self, practice=False, root=None, merge=True, ime=True):
@@ -500,11 +464,8 @@ class ChordSpeedTest:
         self._header_written = OUT.exists() and OUT.stat().st_size > 0
         self._practice_header_written = PRACTICE_OUT.exists() and PRACTICE_OUT.stat().st_size > 0
         self.hand_pairs, self.hand_singles = load_counts(OUT)
-        self.hand_totals = load_hand_totals(OUT)      # 左右 1:1 增补的累计计数
-        # 顶部计数行 (v2.44): 每手 **成功数/样本数** —— 从数据文件现扫 (文件是唯一真相)
-        self.hand_counts = scan_hand_counts(OUT)
-        # 开局握手 = 落后的一侧 (首次运行 0:0 → 左手); 此后每试次按增补规则重抽
-        self.hand = "right" if self.hand_totals['l'] >= self.hand_totals['r'] else "left"
+        # 开局 = 每试次独立 50/50 随机抽边 (v2.50: 无欠账计数、无状态; choose_hand 定稿)
+        self.hand = "right" if random.random() < 0.5 else "left"
         self.down = set()                      # GUI 级物理按下键集 (跨试次; 防自动重复误判)
         # ── 静默失联防护 (v2.37, 2026-10-11 用户报"一击后界面卡住不动") ──
         # 症状: 界面停在原试次、按键无反应、**一条数据都没落盘**。旧版这些都是**静默**的:
@@ -527,15 +488,11 @@ class ChordSpeedTest:
         self.root.bind("<KeyPress>", self.on_press)
         self.root.bind("<KeyRelease>", self.on_release)
 
-        # ── 布局 (v2.43 精简 / v2.44 顶部计数 / v2.45 帮助面板) ──
-        # 界面上只剩两行文字: 顶部 `左 成功/样本 : 右 成功/样本` (v2.44) 与底部 `Trial N` (v2.41);
-        # 记法说明 (圈/叉各指哪一击) 与全部操作细节都收进 **`?` 说明书** (v2.45, 点开才占地方)。
-        self.label_hands = tk.Label(self.root, text="", font=("Consolas", 12),
-                                     fg="#888", bg="#1e1e1e")
-        self.label_hands.pack(pady=(10, 2))
-
+        # ── 布局 (v2.43 精简 / v2.45 帮助面板 / v2.49 只剩 Trial N) ──
+        # 界面上只剩一行文字: 底部 `Trial N` (v2.41)。**采集量不上屏** (v2.49 用户决策: 让采集者
+        # 专心采集) —— 要核对就数 `当量数据.tsv` 的行; 记法说明与操作细节都在 **`?` 说明书**里 (v2.45)。
         kb_frame = tk.Frame(self.root, bg="#1e1e1e")
-        kb_frame.pack(pady=(2, 4))
+        kb_frame.pack(pady=(10, 4))
         self._build_keyboards(kb_frame)
 
         self.label_info = tk.Label(self.root, text="", font=("Consolas", 14),
@@ -555,7 +512,6 @@ class ChordSpeedTest:
 
         self._fit_geometry()
         self._set_window_title()
-        self._update_hand_counts()             # 顶部计数行: 左 成功/样本 : 右 成功/样本 (v2.44)
         self._write_header()
         self._startup_report()
         self.new_code()
@@ -755,14 +711,15 @@ class ChordSpeedTest:
                 f.write("\t".join(HEADER) + "\n")
             self._header_written = True
 
-    # ── 采集手 (唯一模式: 每试次随机单手 + 1:1 增补) ──
+    # ── 采集手 (唯一模式: 每试次**独立 50/50** 随机单手, v2.50) ──
     def choose_hand(self, rng=random):
         """本试次该采哪只手 → 'left'/'right'
-        左右 1:1 **增补** (HAND_TARGET/hand_probability): 每试次独立抽, 落后的一侧概率被推高
-        ⇒ 先还历史欠账, 之后自我纠偏, 且两侧始终交错出现 (练习效应对称)。
-        v2.23: 固定单手模式已移除 (方案要求左右对称 + 双手交集剔除要求两手有同期数据)。"""
-        return "right" if rng.random() < hand_probability(self.hand_totals['l'],
-                                                          self.hand_totals['r']) else "left"
+
+        v2.50 (2026-10-12 用户决策): **每试次独立 50/50**, 无状态 —— 不做欠账增补（平衡机制已删:
+        比例追平后无事可做, 而新用户从头采的累计比例自然收敛到 1:1）。两侧仍然始终交错
+        （50/50 的概率性质: 20 试次全同侧 ≈ 2e-6）⇒ 练习效应对称。
+        v2.23: **固定单手模式已移除**（用户"不设计仅单手采集"）—— 手只能由本方法抽, 无开关。"""
+        return "right" if rng.random() < 0.5 else "left"
 
     def _set_window_title(self):
         """窗口标题 = 采集手 + 练习态 (v2.43: 界面上的标题/平衡行已删 ⇒ 这是"哪只手"的文字落点;
@@ -770,13 +727,6 @@ class ChordSpeedTest:
         hand_txt = {"left": "左手", "right": "右手"}[self.hand]
         mode = ("练习 · " if self.practice else "") + hand_txt + " ⟳"
         self.root.title(f"并击击键测速（{mode}）")
-
-    def _update_hand_counts(self):
-        """顶部计数行 (v2.44): `左 成功/样本 : 右 成功/样本` —— 成功 = `error=0` 的**已落盘**行,
-        样本 = 该手全部**已落盘**行 (落盘失败的行两个数都不加: 文件里没有的不算证据);
-        口径 = `scan_hand_counts` (启动现扫数据文件) + 每落一行累加; 练习数据不计。"""
-        l, r = self.hand_counts['l'], self.hand_counts['r']
-        self.label_hands.config(text=f"左 {l[0]}/{l[1]} : 右 {r[0]}/{r[1]}")
 
     # ── `?` 说明书 (v2.45, 2026-10-12 用户决策"用法单独写一个说明书…放一个问号图标, 点击可以展开说明") ──
     def _build_help(self):
@@ -889,11 +839,8 @@ class ChordSpeedTest:
             print(f"正式采集: 混采 1击:2击 = {MIX_ONE_TWO[0]}:{MIX_ONE_TWO[1]}"
                   f" (P(1击)={MIX_ONE_TWO[0]/sum(MIX_ONE_TWO):.0%})；练习段由稳定期方法剔除"
                   f" (分析-难度剔除.py 动态维护排除表)")
-            print("  · 采集手 = 左右 1:1 随机单手 (v2.23 起无固定单手开关; 每试次抽边, 增补落后侧)")
-            n_l, n_r = self.hand_totals['l'], self.hand_totals['r']
-            print(f"  · 左右手 1:1 混采 + 增补: 已采 左 {n_l} : 右 {n_r} (目标 "
-                  f"{HAND_TARGET[0]}:{HAND_TARGET[1]}) → 本试次 P(右)={hand_probability(n_l, n_r):.2f}"
-                  f" (偏置上限 ±{HAND_MAX_SKEW:g}; 两侧始终交错 ⇒ 练习效应对称)")
+            print("  · 采集手 = 左右 1:1 随机单手 (v2.23 起无固定单手开关; v2.50 起每试次独立 50/50,"
+                  " 无欠账增补 —— 累计比例自然收敛到 1:1, 两侧始终交错)")
 
     def _next_practice_combo(self):
         """练习轮转: 练得最少的组合优先 (均匀覆盖; 不设达标判据)"""
@@ -922,7 +869,7 @@ class ChordSpeedTest:
     def new_code(self):
         self._cancel_release_timeout()
         self._maybe_refresh_excluded()
-        new_hand = self.choose_hand()          # 每试次按增补规则抽边 (两侧交错 ⇒ 练习效应对称)
+        new_hand = self.choose_hand()          # 每试次独立 50/50 抽边 (v2.50: 无状态; 两侧交错)
         if new_hand != self.hand:
             self.hand = new_hand
             self._set_window_title()           # v2.43: 手别只写在窗口标题 (界面平衡行已删)
@@ -1155,11 +1102,8 @@ class ChordSpeedTest:
                     "" if ok else self.st.actual_str(),
                     str(self._trial_num()), self.session_id]
             saved = self._append_line(OUT, row)
-            if saved:                            # 顶部计数只计**真的落盘了**的行 (文件里没有的不算样本)
+            if saved:                            # 覆盖计数只认**真的落盘了**的行 (文件里没有的不算证据)
                 h = 'l' if self.hand == "left" else 'r'
-                self.hand_counts[h][1] += 1      # 样本数 (成功 + 错误)
-                self.hand_counts[h][0] += 1 if ok else 0
-                self._update_hand_counts()
                 if ok:                           # 采样覆盖只计**已保存**的正确试次 (未落盘的不算证据)
                     ss = self.code_strokes
                     side = LEFT_SET if h == 'l' else RIGHT_SET
@@ -1167,8 +1111,6 @@ class ChordSpeedTest:
                     self.hand_singles[(h, cs[0])] += 1
                     if len(cs) > 1:              # 1 击行不计击对 (孤立试次无转移)
                         self.hand_pairs[(h, cs[0], cs[1])] += 1
-                    self.hand_totals[h] += 1     # 左右 1:1 增补计数 (只算成功试次 = 证据量;
-                                                 #   它喂 choose_hand; 界面另显 hand_counts)
         self.recorded += 1 if saved else 0
         self.total_trials += 1
         self._cancel_release_timeout()
@@ -1267,25 +1209,18 @@ def selftest():
     assert ChordSpeedTest._combo_w(app, "zf") == COMBO_W[2]                # 未列入 = 1.0
     assert ChordSpeedTest._combo_w(app, REF_COMBO['l']) == COMBO_W[3]
     globals()["_WEIGHTS"] = {}
-    # 左右 1:1 增补 (v2.22): 从历史欠账收敛到 1:1, 且两侧始终交错出现
-    # 偏置上限 = 0.5 ± HAND_MAX_SKEW = [0.18, 0.82] (2026-10-01 修: 原 clamp 误写成 [skew, 1−skew])
-    assert hand_probability(0, 0) == 0.5
-    assert abs(hand_probability(1000, 0) - (0.5 + HAND_MAX_SKEW)) < 1e-9
-    assert abs(hand_probability(0, 1000) - (0.5 - HAND_MAX_SKEW)) < 1e-9
-    assert 0.5 - HAND_MAX_SKEW > 0 and 0.5 + HAND_MAX_SKEW < 1      # 两侧都留概率 ⇒ 不退化成单手段
-    assert hand_probability(500, 400) > 0.5 + 1e-9                 # 右手落后 ⇒ 抬高右手概率
-    assert hand_probability(400, 500) < 0.5 - 1e-9                 # 右手领先 ⇒ 压低
-    rng2 = random.Random(20261001)
-    n_l, n_r, seq = 1000, 0, []                                    # 模拟历史欠账 1000:0
-    for _ in range(3000):
-        take_r = rng2.random() < hand_probability(n_l, n_r)
-        seq.append('r' if take_r else 'l')
-        n_l, n_r = (n_l, n_r + 1) if take_r else (n_l + 1, n_r)
-    ratio = n_r / (n_l + n_r)
-    win = [sum(1 for s in seq[i:i + 20] if s == 'r') for i in range(0, len(seq) - 20, 20)]
-    assert 0.46 < ratio < 0.54, (n_l, n_r, ratio)                  # 收敛到 1:1 (±4%)
+    # 双手混采 (v2.50): 每试次**独立 50/50**, 无欠账、无状态 —— 累计比例自然收敛, 两侧始终交错
+    rng2 = random.Random(20261012)
+    seq = ['r' if rng2.random() < 0.5 else 'l' for _ in range(4000)]
+    ratio = seq.count('r') / len(seq)
+    win = [seq[i:i + 20].count('r') for i in range(0, len(seq) - 20, 20)]
+    assert 0.47 < ratio < 0.53, ratio                              # 4000 试次 ±3%
     assert all(0 < w < 20 for w in win), win[:5]                   # 每个 20 试次窗口两侧都出现
-    # v2.23: 固定单手模式已移除 —— 构造器不再收 hand 参数 (手只能由 choose_hand 抽)
+    # v2.50: 平衡机制(欠账增补)整体删除 —— 相关符号必须真的不存在, 采集器不得再依赖历史计数
+    for name in ("hand_probability", "HAND_TARGET", "HAND_CATCHUP", "HAND_MAX_SKEW",
+                 "HAND_COUNT_OK_ONLY", "load_hand_totals"):
+        assert name not in globals(), f"{name} 应随 v2.50 删除"
+    # v2.23: 固定单手模式已移除 —— 构造器不再收 hand 参数 (手只能由 choose_hand 抽; 至今唯一模式)
     # v2.47: 构造器也不再收 hook 参数 (键盘钩子层已删, 输入层只剩摘窗口 IME)
     # v2.48: 新增 ime= 输入层开关 (--no-ime 关掉整层; 与姊妹项目采集输入层.py 同义)
     import inspect
@@ -1293,8 +1228,8 @@ def selftest():
     assert sig == ["self", "practice", "root", "merge", "ime"], sig
     print(f"工具自测通过: 排除表(含保留 3 键组合) / 混采 1击:2击={MIX_ONE_TWO[0]}:{MIX_ONE_TWO[1]} / "
           f"3 键组合与 2 键同比例 {100*share:.2f}% / 降权表(权重乘进采样) / "
-          f"左右 1:1 增补(自 1000:0 收敛到 {ratio:.1%}; 20 试次窗口两侧都在) / "
-          f"无固定单手模式(仅随机抽边)")
+          f"双手混采(每试次独立 50/50: 4000 试次 {ratio:.1%}; 20 试次窗口两侧都在; 平衡符号已删) / "
+          f"无固定单手模式(仅随机抽边, 无单手采集模式)")
 
 
 # ═══════════════════ GUI 冒烟测试 (隐藏窗口) ═══════════════════
@@ -1453,14 +1388,15 @@ def smoke(tmp_out=True):
         assert abs(math.hypot(ln[2] - ln[0], ln[3] - ln[1]) - 2 * R_KEY) < 1e-9, (ln, R_KEY)
         assert abs(math.hypot(ln[0] - cx, ln[1] - cy) - R_KEY) < 1e-9, "叉端点必须落在圈上"
         assert abs((ln[0] + ln[2]) / 2 - cx) < 1e-9 and abs((ln[1] + ln[3]) / 2 - cy) < 1e-9
-        # 图例已删 (v2.45) ⇒ 这里改为验证 `?` 说明书**真的能展开/收起**且正文渲染出了两行信息
+        # 图例已删 (v2.45) ⇒ 这里改为验证 `?` 说明书**真的能展开/收起**且正文渲染出了记法与试次号
         assert app.manual_open is False and not packed(app.manual_frame)
         app._toggle_manual()                          # 点 `?` → 展开
         root.update_idletasks()
         assert app.manual_open is True and packed(app.manual_frame)
         body = app.manual_text.get("1.0", "end")
-        assert "圈" in body and "叉" in body and "Trial" in body and "成功数/样本数" in body, \
-            "说明书正文应含记法与两行信息的解释: " + body[:80]
+        assert "圈" in body and "叉" in body and "Trial" in body and "当量数据.tsv" in body, \
+            "说明书正文应含记法、试次号与数据落点: " + body[:80]
+        assert "成功数/样本数" not in body, "v2.49 已删顶部计数行 ⇒ 说明书不得再讲它: " + body[:80]
         assert "**" not in body and "#" not in body.split("\n")[0], "Markdown 标记应被渲染掉"
         h_open = root.winfo_reqheight()
         app._toggle_manual()                          # 再点 → 收起
@@ -1745,35 +1681,15 @@ def smoke(tmp_out=True):
         assert "焦点" not in app.label_warn.cget("text")
         assert "久未完成" not in app.label_warn.cget("text")
         app._cancel_next()
-        # ⑤ 顶部计数行 (v2.44): 左 成功/样本 : 右 成功/样本 —— 口径 = 数据文件 (成功 = error=0)
-        assert hasattr(app, "label_hands")
-        # 先验"全程累加 == 现扫同一份数据文件" (两处口径必须逐行一致: 落盘累加 vs 扫描函数)
-        assert app.hand_counts == scan_hand_counts(OUT), (app.hand_counts, scan_hand_counts(OUT))
-        l0, r0 = list(app.hand_counts['l']), list(app.hand_counts['r'])
-        app.hand = "left"                               # 左手 ok 行 → 左 成功+1 样本+1
-        app.code_strokes = ['sf']
-        app.st = StrokeTrial(['sf'])
-        app.st.press('s', 0.0); app.st.press('f', 0.03)
-        app.st.release('s', 0.15); app.st.release('f', 0.16)
-        app._record(ok=True)
-        assert app.hand_counts['l'] == [l0[0] + 1, l0[1] + 1], app.hand_counts
-        app.st = StrokeTrial(['sf'])                    # 左手错误行 → 只加样本
-        app.st.press('q', 0.0)
-        app.st.release('q', 0.05)
-        app._record(ok=False)
-        assert app.hand_counts['l'] == [l0[0] + 1, l0[1] + 2], \
-            "错误行只加样本、不加成功: " + str(app.hand_counts)
-        app.hand = "right"                              # 右手 ok 行 → 右 成功+1 样本+1
-        app.code_strokes = ['ui']
-        app.st = StrokeTrial(['ui'])
-        app.st.press('u', 0.0); app.st.press('i', 0.03)
-        app.st.release('u', 0.10); app.st.release('i', 0.11)
-        app._record(ok=True)
-        assert app.hand_counts['r'] == [r0[0] + 1, r0[1] + 1], app.hand_counts
-        assert app.label_hands.cget("text") == \
-            f"左 {l0[0]+1}/{l0[1]+2} : 右 {r0[0]+1}/{r0[1]+1}", app.label_hands.cget("text")
-        assert app.hand_counts == scan_hand_counts(OUT), "三次落盘后与扫描口径不一致"
-        assert scan_hand_counts(Path(str(OUT) + "_不存在")) == {'l': [0, 0], 'r': [0, 0]}
+        # ⑤ 顶部计数行已随 v2.49 删除 (用户决策: 让采集者专心采集 ⇒ 界面只剩 `Trial N`)
+        #    删掉的字段与函数必须**真的不存在** (防它们悄悄回来)
+        for name in ("label_hands", "hand_counts", "_update_hand_counts", "scan_hand_counts"):
+            assert not hasattr(app, name) and name not in globals(), f"{name} 应随 v2.49 删除"
+        # 覆盖计数仍在 (采样侧只删了平衡机制, 覆盖/多样性一条不动)
+        assert app.hand_pairs is not None and app.hand_singles is not None
+        # v2.50: 平衡机制(欠账增补)已整体删除 —— 相关属性/函数必须真的不存在 (防回潮)
+        for name in ("hand_totals", "hand_probability", "load_hand_totals"):
+            assert not hasattr(app, name) and name not in globals(), f"{name} 应随 v2.50 删除"
         app._cancel_next()
         # ── v2.38 看门狗 + 击序可见性 (2026-10-11 用户实测"快打时偶发卡住") ──
         # ① 错误捕获态不会永久卡住: 只要"还有键没松", 旧版永远不落盘也不推进 (界面像卡死);
@@ -1896,7 +1812,7 @@ def smoke(tmp_out=True):
         print("GUI 冒烟通过: 键位图(图形区分击序 —— 第 1 击=圈 / 第 2 击=叉(长=圈直径, 端点落在圈上) / "
               "共有=圈里一个叉; 标记统一白色; 按下=加粗高亮、松开恢复; 非目标键=骨架圈(按下则亮圈); "
               "半边键盘=只画采集手; 默认两击合并 / --split 两图(下块 stroke=1 画叉); "
-              "界面只剩两行文字 (含 `?` 说明书; v2.45)) / "
+              "界面文字只剩试次号 (含 `?` 说明书; v2.45)) / "
               "非目标手禁用(忽略不产生R1) / 1击+2击混采 / 记录列 / "
               "完成提示只显示时间(1击 xxms; 2击 xx+xx+xx=xxms 且算式自洽) / "
               "错误捕获(完整组合落盘) / 随机单手(两手都抽到, 无固定开关) / "
@@ -1910,8 +1826,8 @@ def smoke(tmp_out=True):
               "不提示击次(无边框色/无图例加粗/试次行只写 Trial N, 推进击序画面不变; v2.41) / "
               "界面精简(无采集手说明行/标题平衡行/计数行/操作提示行, 只剩图例+键盘+Trial N; "
               "焦点与超时不再上屏, 但看门狗与真问题告警仍在; v2.43) / "
-              "顶部计数行(左 成功/样本 : 右 成功/样本; 口径 = 数据文件, 错误行只加样本, "
-              "累加值 ≡ 现扫同一文件; v2.44) / "
+              "界面只剩 Trial N 一行(顶部证据量计数行已删, 字段与函数确不存在; v2.49) / "
+              "双手混采(每试次独立 50/50 · 无欠账无状态 · 平衡符号确不存在 · 无单手采集模式; v2.50) / "
               "`?` 说明书(独立文档 采集器说明书.md · 默认收起 · 点开渲染 Markdown 标题/列表 · "
               "缺文件明说路径 · 无图例行; v2.45)")
     finally:
