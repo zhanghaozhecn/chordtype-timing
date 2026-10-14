@@ -1,6 +1,126 @@
 #!/usr/bin/env python3
 """
-并击当量采集工具 v2.50（2 击试次 = 4 码 = 一个二字词）
+并击当量采集工具 v2.57（2 击试次 = 4 码 = 一个二字词）
+v2.57 (2026-10-12 用户决策 "当前键位组合所在半边的另外半边还是需要隐藏, 否则难以定位, 其他不变"):
+                    **恢复半边隐藏**（纯显示层, 数据侧零改动）—— `KeyboardCanvas` 把 `hand` /
+                    `set_hand` / `shown` 与 `_paint` 的隐藏分支**装回来** (v2.55 那次撤销作废),
+                    采集器 `_paint_targets` 重新按试次手别调 `set_hand`: **只画本试次采集手那一半**,
+                    另一半整个不画 (键少一半才好一眼找到目标)。
+                    ⚠ **与 v2.31–v2.54 的差别 (关键, 别混)**: 这里**只隐藏、不改尺寸基准** ——
+                    缩放基准恒为**整张键盘** (v2.56 的口径没动) ⇒ 可见半边的键大小/间距与"显示完整键盘"
+                    时**完全一致** (不会因为隐藏而放大), 可见半边仍落在"整张键盘"里自己那一侧
+                    (左手在左/右手在右, 位置语义不变), 隐藏的那半边位置留白。
+                    "其他不变" = 窗口尺寸 (屏幕 1/3×1/4)、等比缩放、按下绿/红、出错闪红、
+                    控制台日志一律未动。
+                    `--smoke`: "完整键盘"那组断言换回**半边隐藏**那组 (半手键全不可见 · 隐藏可逆
+                    <v2.32 修> · 另一手是"隐"不是"空" · `--split` 两块同口径), 窗口尺寸/缩放那组
+                    断言保持 v2.56 原样; `mk()` 恢复"隐"档。
+v2.56 (2026-10-12 用户决策 "默认窗口大小改成宽 1/3 屏幕, 高 1/4 屏幕"): **默认窗口 = 屏幕 1/3 宽 × 1/4 高**
+                    （纯显示层, 数据侧零改动）—— `_fit_geometry` 简化为两条: 默认尺寸 = 屏幕的分数
+                    (居中、不小于内容需求), 不再反推"刚好放下键盘"的宽度 (v2.55 那条算法作废);
+                    **键位图照旧在窗口里等比缩放居中** (顶住较紧的那一维: 本机 1920×1080 ⇒ 窗口 640×270,
+                    键盘 s≈1.41、宽顶满、竖向留白 ~24px)。
+                    ⚠ **顺带修一个真 bug**: `<Configure>` 报的是**含高亮环**的窗口尺寸, 而 canvas 坐标系
+                    原点在环内侧 (实测: 画在 (0,0) 的图元 bbox 从环内起算) ⇒ `_relayout` 现在按
+                    `事件尺寸 − 2×highlightthickness` (可绘面积) 排版; 旧写法让键位图左右各溢出半个环宽、
+                    内边距被环吃掉 (窗口小的时候肉眼才看得出)。
+                    `--smoke`: 默认尺寸断言改成 `max(屏幕//3, 内容宽) × max(屏幕//4, 内容高)`,
+                    缩放断言改成"几何不变量 + 两维都不溢出 + 顶住较紧的一维"; `--split` 两块图的
+                    缩放断言改为"接近且为正" (默认窗口矮 ⇒ 每块 s < 1 是正常的; 两块差 1px 高度 ⇒ ~1% 差)。
+v2.55 (2026-10-12 用户决策 "键位不显示全很不直观, 还是需要显示完整键盘; 高度是全屏的一半,
+                    宽度是在能放下键位图的情况下留一些间隙到边框"): **恢复完整键盘 + 窗口按键盘尺寸定宽**
+                    （纯显示层, 数据侧零改动）——
+                    ① (⚠ **v2.57 已恢复半边隐藏**) **撤销 v2.31 半边键盘**: 30 键恒显示 (`KeyboardCanvas` 删 `set_hand`/`hand`/`shown`,
+                       `_paint` 删隐藏分支) —— 本试次该打的那半边带目标标记, **另半边 = 极暗骨架圈**
+                       (与非目标键同一套渲染), 手别另见窗口标题; v2.35 的"非目标手输入禁用"不变
+                       (按错手不产生 R1)。
+                    ② **尺寸基准回到整张键盘** (10 列 × 3 行都占地方; v2.54 曾按"可见半边"定标)。
+                    ③ (⚠ **v2.56 已作废**: 默认窗口改为屏幕 1/3 宽 × 1/4 高) **窗口 = 高半屏 + 宽刚好放下键盘**: 高 = 屏幕高/2; 键位图按**可用高**定标
+                       (`s = (窗高 − 竖向开销 − 边框) / 键盘基准高`), 宽 = `键盘基准宽×s + 横向开销`;
+                       **开销现测** (根需求 − 画布需求 ⇒ 改布局自动跟), 屏幕放不下才改按宽度定标。
+                       ⇒ 本机 1920×1080 实测 **1635×540**, 键盘竖向填满、横向只多出 `?` 图标那一列,
+                       余下"间隙"就是键位图自己的内边距 (8×s ≈ 30px)。
+                    `--smoke`: "半边隐藏/可逆"一组断言换成**完整键盘**断言 (无 set_hand/hand/shown 属性 ·
+                       每键至少一个图形可见 · 另一手的键也在图上) + 窗口尺寸按新公式对账
+                       (高 = screen//2 · 宽 = 键盘宽×s + 开销 · 竖向填满 · 横向不浪费) + `mk()` 删"隐"档。
+                    `实验/键位图预览.py` 各场景去掉 set_hand, 图重出。
+v2.54 (2026-10-12 用户决策 "窗口(键位图)太小了, 键位图的大小应该随窗口大小变化,
+                    窗口大小默认为全屏的一半长、一半高"): **窗口默认半屏 + 键位图随窗口等比缩放**
+                    （纯显示层, 数据侧零改动）——
+                    ① **窗口默认 = 屏幕宽/2 × 屏幕高/2** (居中; 且不小于内容需求 —— `_fit_geometry`
+                       不再把窗口收成内容尺寸); 展开 `?` 说明书时 **只放大不缩小** (用户调过的尺寸
+                       不该被程序收回去, 也不移动窗口)。
+                    ② **键位图 = 画布 × 等比缩放**: `KeyboardCanvas` 绑 `<Configure>` → `_relayout`
+                       (`s = min(可用宽/基准宽, 可用高/基准高)`, 只改图元 coords/width, **不重建图元**
+                       ⇒ 颜色/可见性/半边隐藏一律不受影响)。等比 ⇒ 圈永远是圆 (绝不拉成椭圆),
+                       格距/内边距/**线宽**一起缩放 (`stroke_w = round(KEY_W×s)`, 下限 1 —— 大图下
+                       2px 会显细), 叉仍"内切于圈、每笔 = 圈直径"。
+                    ③ (⚠ **v2.55 已作废**: 半边键盘撤销 ⇒ 基准回到整张键盘) **尺寸基准 = 本画布真正要画的那一半** (半边键盘时隐藏那半不占地方; 两手都画
+                       = 全宽) ⇒ 半屏窗口下左手键盘 s≈3.9 (键 φ134 vs 原来 φ34); **贴自己那一侧**
+                       (左手贴左/右手贴右, 位置语义不变), 垂直居中。
+                    ④ 画布撑满窗口 (`sticky="nsew"` + 行列权重), 右上 `?` 由"place 到窗口角"改成
+                       **grid 到键盘帧的右上角** (独占一列 ⇒ 永不压住键位图)。
+                    落地读数 (1920×1080 机: 窗口 960×540, pad 31px): `l` 可见键 x∈[39,830] /
+                    `r` x∈[130,921] / 两者 y∈[39,501] / s 3.91 / 线宽 8 / 未布局时 = 基准 432×138。
+                    `--smoke`: 半屏尺寸断言 + **几何不变量在缩放后逐条成立** (圈仍是圆 · 叉内切 ·
+                    每笔=圈直径 · 线宽 = round(KEY_W×s)) + 窗口改小 ⇒ 键位图跟着变小 +
+                    未布局画布 = 基准排版 (432×138, s=1, r=17) + `--split` 两块都填满各自那行 +
+                    旧常量 `X_D` 防回潮 (叉端点偏移现在按半径现算 r/√2)。
+v2.53 (2026-10-12 用户决策 "出错时整个键盘边框闪一下红"): **出错 ⇒ 画布边框闪红一下**
+                    （纯显示层, 数据侧零改动）—— 界面已无任何文字 (v2.52) ⇒ 给"没在看控制台"的人
+                    一个**非文字**的即时信号: 出错时边框从 `KEY_FRAME` 变 `KEY_BAD`（与"按错的键"
+                    同色）, `采集核心.ERR_FLASH_MS = 450ms` 后自动复原 —— 只改**颜色**、不加粗
+                    （与 v2.51 的按下反馈同规矩）, v2.41 那条"边框不随击序变化"仍成立
+                    （**只有出错才动边框**, 且会自动复原）。
+                    落地: `KeyboardCanvas.flash_error(ms=ERR_FLASH_MS)` / `flash_end()`（幂等,
+                    定时器到点自动调; `stop_guards` 退出时收掉未到点的定时器）+ 只读回读 `flashing()`;
+                    采集器侧唯一入口 `_err_notify()`（= 控制台即时一行 + **每试次只闪一次**）,
+                    由 `new_code` 在新试次开头复位 `_err_flashed`（捕获态里继续按键不再闪, 否则一直在闪）;
+                    `--split` 两块图**都闪**（`_canvases()` 统一取）。
+                    `--smoke`: 出错 ⇒ 边框红且不加粗 · 同一试次第二次按键不重闪 · 非错试次全程中性 ·
+                    **定时器路径真跑一遍**（1ms 长闪 + 事件循环 ⇒ 必须自己复原）· `new_code` 复位额度 ⇒
+                    新试次能再闪 · `ERR_FLASH_MS` 区间自检; 出错注入块收尾手动 `flash_end()` 复位
+                    （冒烟不跑事件循环, 450ms 定时器不会到点）。
+                    `实验/键位图预览.py --window --err` 出 `窗口布局-出错闪红.png`（真窗口, 取图用长闪）。
+v2.52 (2026-10-12 用户决策 "修改提示显示的位置, 不在GUI中显示trial数、当前试次时间、错误日志,
+                    全部移到后台（命令行）"): **界面只剩键位图 + 右上 `?`, 其余信息全部走控制台**
+                    （纯显示层, 数据侧零改动）—— 删掉 `label_block`(Trial N) / `label_info`
+                    (完成时间 / 错误提示 / 跳过与间隔提示) / `label_warn`(告警) 三行控件,
+                    改为**按行打到控制台**:
+                    ① **每试次一行** (`_trial_line`, 在 `_record` 里打, 与落盘行 `trial` 列**同源**
+                        ⇒ 日志与数据可逐行对账): `[Trial 43] l sf|xc  ok  120+95+130=345ms` /
+                       `[Trial 43] l sf  ok  160ms` / `[Trial 44] l sf|dg  ✗ R1@2 键序错误: d ｜ 实际 sf|dg`
+                        (+ `⚠ 未落盘` = 该行没进文件);
+                    ② **错误即时一行** (`_err_console`): 出错当场打 `✗ [Trial N] ✗ R1 …（全部松开即继续）`
+                       —— 捕获态必须说清怎么脱身 (v2.38 教训), 不能等收尾才说;
+                    ③ **跳过 / 间隔按键**同样明示 (`[Trial N] ␣ 已跳过` /
+                       `⏳ [Trial N] 下一试次还没出现 —— 这一下没有被记录`, 每个间隔只提示一次防刷屏);
+                    ④ **告警** (`_refresh_warn`) 从界面标签改打 **stderr**, 且按
+                       `(err_count, save_failures)` **去重** (只在计数变化时打, 不重印旧信息)
+                       ⇒ **stdout = 会话日志 / stderr = 真问题** (内部错误 / 落盘失败) 这条分界更清楚。
+                    时间串口径不变 (三段各自取整后相加 ⇒ 算式恒自洽; 落盘仍用未取整浮点)。
+                    窗口高度内容自适应 ⇒ **520×174**（比 v2.51 矮 100px; 只剩键盘一行）。
+                    `--smoke`: 读 `label_*` 的断言**全换成捕控制台输出的断言** (含"三行控件必须真的
+                    不存在"防回潮), 并断言日志行的 `Trial N` 与落盘行 `trial` 列一致。
+v2.51 (2026-10-12 用户决策 "①全白色易疲劳, 改成按下后图案变绿, 不用变粗, 按错的变红
+                    ②现在重叠键亮起时圈和叉都亮起, 应为第 1 击圈亮起, 第 2 击叉亮起"):
+                    **按下反馈由"加粗"改成"颜色"**（纯显示层, 数据侧零改动）——
+                    ① 未按下的标记仍**一律白色** (形状仍只表示"属于第几击"); 按下**当前该打的键**
+                       ⇒ 该击的图形变 **绿** (`KEY_OK`); 按**不该打的键** (非目标键、或另一击独有的键)
+                       ⇒ 变 **红** (`KEY_BAD`); **线宽恒定** (`KEY_W_PRESS` 常量整体删除 ——
+                       "不用变粗", 白底加粗那套反馈整体退场);
+                    ② **共键按当前击分别亮**: 画布新增"当前正在打的那一击"输入
+                       (`KeyboardCanvas.mark_pressed(keys, stroke=...)`, 由 `_update_kb` 传 `st.si`)
+                       ⇒ 共键 s 在第 1 击按下只**绿圈** (叉保持白)、过到第 2 击只**绿叉** (圈保持白)
+                       —— 旧版是圈和叉一起加粗。
+                    实现: 颜色规则只在 `采集核心.KeyboardCanvas._paint` / `_press_color` 一处
+                    (`_press_color(held, s, st)`: 未按下=白 / 属于当前击的那个图形=绿 /
+                    不属于当前击=红; `press_stroke=None` 即无当前击信息时按下的目标图形全绿)。
+                    `_stuck_guard` 两条自愈路径补 `_update_kb()` —— 收尾后不留"还按着"的绿/红。
+                    `--smoke`: 旧的"按下=加粗"断言全换成**颜色**断言 (共键按第 1 击只绿圈 /
+                    按第 2 击只绿叉 · 非目标键按下=红且不粗 · 不属于当前击的目标键按下=红 ·
+                    松开回白 · `--split` 两块图各按自己的击序上色) + `KEY_W_PRESS` 防回潮 +
+                    `snapshot` 把线宽字段换成颜色字段 (快照必须覆盖按下态才守得住"首笔≡后续")。
 v2.50 (2026-10-12 用户决策 "现在双手比例已经追平, 不需要平衡功能了; 用户从头开始采集就只保留
                     双手混采模式, 不设计仅单手采集"): **抽边改成每试次独立 50/50（无状态）** ——
                     删掉 v2.22 起的"欠账增补"平衡机制: `hand_probability()` + 常量
@@ -105,13 +225,17 @@ v2.41 (2026-10-11 用户决策 "不需要提示击次了"): **撤掉"现在打�
                     **当前击加粗** (`_sync_legend` 只留"1 击试次淡掉第 2 击档"这条**试次**信息);
                     ③ 试次行的 `· k击 · 当前第 j 击` → **只写 `Trial N`** (`label_block`)。
                     图例本身保留 (它是**记法说明**: 圈 = 第 1 击 / 叉 = 第 2 击), 但改**全白**
-                    (不再着色)。⇒ 整个界面**再无任何颜色编码**, 且画布内容**只由击序决定**,
+                    (不再着色)。⇒ **未按下时**整个界面再无任何颜色编码, 且画布内容
+                    **只由击序决定**,
                     不随"打到第几击"变化 (v2.39/v2.40 那类"推进击序时画面闪变"的类别连根消失)。
+                    ⚠ "**未按下时**无颜色编码" —— v2.51 起**按下态**用颜色反馈 (绿/红),
+                    但画布内容仍**只由击序决定** (按下色只改颜色、不改图形与可见性)。
                     **数据侧零改动** (22 列/门控/计时/口径全不动; 纯显示层)。
 v2.40 (2026-10-11 用户决策 "换一种表示方法"): **图形区分击序, 颜色统一白色** ——
                     第 1 击 = **圈** · 第 2 击 = **叉** (叉长 = 圈直径, 端点落在圈上 = 内切)
                     · 两击共有 = **圈里一个叉**; 键位标记**一律白色** (不再用蓝/红分击),
                     **按下 = 加粗高亮, 松开恢复** (白已最亮 ⇒ 高亮只能靠线宽 2→5);
+                    ⚠ **按下反馈已由 v2.51 改为颜色** (按下=绿 / 按错=红, 不再加粗);
                     非目标键 = 极暗空圈 (键位骨架, 不表示任何一击)。
                     "现在打第几击"不再由键位颜色承载, 仍由**画布边框色** (蓝=第 1 击 / 红=第 2 击)
                     + **图例加粗** + 试次行 "当前第 j 击" 提示; 图例图形与键帽同源 (圈 / 叉)。
@@ -141,7 +265,7 @@ v2.38 (2026-10-11 用户实测"快打时偶发界面卡住 / 松开时圈变红"
                     修: ① **看门狗** —— 捕获态静默 5s 视同"已全放"→ 错误行照常落盘 + 继续
                     (`CAPTURE_STUCK_S`); 正常试次静默 20s (漏收松开事件) 同法收尾 (`TRIAL_STUCK_S`)。
                     ② 错误提示补 **"（全部松开即继续）"** —— 旧版只说 "✗ R1 …", 用户不知道在等什么。
-                    ③ 试次间隔 (300-800ms) 里按键改为**明确提示** "⏳ 下一试次还没出现 —— 这一下没有
+                    ③ 试次间隔 (当时 300-800ms; v2.62 起 300-500) 里按键改为**明确提示** "⏳ 下一试次还没出现 —— 这一下没有
                     被记录" (旧版静默丢弃 ⇒ 快打抢拍时击序错位)。
                     ④ **当前击可见**: 图例「第 1/2 击」当前击**加粗** + 画布边框 2→3px
                     (合并图里"现在打第几击"原来只由细边框提示, 快打时看不出)。
@@ -167,6 +291,7 @@ v2.23 (2026-10-01): 移除固定单手模式 (只剩随机单手; 至今仍是�
 v2.24 (2026-10-01): **无视输入法** —— 当时 = 低层键盘钩子 (主) + 摘除窗口 IME (回退)
                     (⚠ v2.46 删了进程级 ImmDisableIME、v2.47 删了钩子层 ⇒ 现只剩摘窗口 IME)
 v2.31 (2026-10-04): **半边键盘** —— 只显示采集手那一半 (删基准键标记 + 手分界线)
+                    (⚠ v2.55 曾撤销、**v2.57 已恢复** —— 见 v2.57 条)
 v2.32 (2026-10-06): **圆形键帽** (删方形容器; 圆圈一律不填充, 按下只亮圈) + 修两个显示 bug:
                     ① 共键按下态改用 held (松开即灭 —— 旧用 downs 残留已放开的键,
                     击 1 的共键一放就随击序提前亮橙); ② 半边隐藏可逆 (旧 _paint 普通键
@@ -183,18 +308,30 @@ v2.33 (2026-10-08): **完成提示只显示时间** —— 一击 `xxms`; 二击
 显示: 键盘位置图（正交网格/直列键盘）——空白键帽无字母。**两击合并为一张图**（v2.26,
       2026-10-02 用户决策）: **图形区分击序**（v2.40, 2026-10-11 用户决策）——
       **第 1 击 = 圈 · 第 2 击 = 叉**（叉长 = 圈直径, 端点落在圈上 = 内切）·
-      **两击共有 = 圈里一个叉**; 键位标记**一律白色**, 按下 = 加粗高亮、松开恢复;
-      非目标键 = 极暗空圈（键位骨架）。⇒ **2 击试次一出现就看得见第 2 击的叉**,
-      1 击试次全程只有圈。（历经 绿第三色 → 左半右半 → 叉形四三角 → 实心双圆 → 方键帽+圆环 →
+      **两击共有 = 圈里一个叉**; 非目标键 = 极暗空圈（键位骨架）。
+      ⇒ **2 击试次一出现就看得见第 2 击的叉**, 1 击试次全程只有圈。
+      （历经 绿第三色 → 左半右半 → 叉形四三角 → 实心双圆 → 方键帽+圆环 →
       圆键帽逐击上色 → 只给当前击上色 七版配色方案; 第八版 = 形状编码）
+      **按下反馈 = 颜色**（v2.51, 2026-10-12 用户决策"全白色易疲劳"）: 未按下 = 白;
+      按下**当前该打的键** ⇒ 该击的图形**绿**（共键按第 1 击只绿圈、按第 2 击只绿叉,
+      另一个图形保持白）; 按**不该打的键**（非目标键 / 另一击独有的键）⇒ **红**;
+      **线宽恒定**（不再加粗）。
+      **出错 ⇒ 整个画布边框闪红一下**（v2.53, 2026-10-12 用户决策）: 唯一的非文字出错信号
+      （界面已无文字）—— 只改边框颜色、不加粗, `ERR_FLASH_MS` 后自动复原。
+      **尺寸随窗口等比缩放**（v2.54, 2026-10-12 用户决策）: 窗口默认 = 屏幕一半宽×一半高,
+      键位图按可用空间等比放大（圈仍是圆、线宽一起缩放）; 尺寸基准 = 本试次采集的那半边,
+      贴自己那一侧（左手贴左/右手贴右）—— 半屏下键位图比原来大 ~3.9 倍。
       **不提示"现在打第几击"**（v2.41, 2026-10-11 用户决策）: 圈在前、叉在后 ⇒ 击序图上写全,
-      故**没有**边框色提示、**没有**图例加粗、试次行**只写 `Trial N`** —— 整个界面
-      **不含任何颜色编码** (标记白 / 非目标键极暗 / 边框中性)。图例保留, 只作**记法说明**
+      故**没有**边框色提示、**没有**图例加粗（试次号原写在底部, **v2.52 起随全部文字一起移到控制台**）—— 图本身
+      **不随击序变化**（"当前击"只影响**按下时**哪个图形变绿, 见 v2.51）。图例保留, 只作**记法说明**
       （第 1 击 = 圈 / 第 2 击 = 叉, 一律白色; 1 击试次淡掉第 2 击档 = 试次信息）。
       --split 可回到旧的两击上下两图（下块 = 第 2 击, 同样画叉）。
-      **半边键盘**（v2.31, 2026-10-04 用户决策）: 只画本试次采集手的那一半（键位保持原位）,
-      另一半整个隐藏 —— 手别提示靠"另一半根本不在", 替代基准键标记（f/j 短横线）与
-      手分界线（中缝粗竖线）这两类人工记号（均已删）。
+      **半边键盘**（v2.31, 2026-10-04 用户决策; **v2.55 曾撤销 → v2.57 恢复**）: **只画本试次
+      采集手那一半**, 另一半整个不画 —— 屏幕上的键少一半, 目标一眼就能找到（用户 2026-10-12
+      "另外半边还是需要隐藏, 否则难以定位"）。**键位保持原位**（左手那半在左、右手那半在右）,
+      手别提示靠"另一半根本不在" + **窗口标题**; 基准键标记与手分界线这两类人工记号**不恢复**。
+      ⚠ **与 v2.31–v2.54 的差别**: v2.57 起**只隐藏、不改尺寸基准**（缩放基准恒为整张键盘）
+      ⇒ 可见半边的键大小与显示完整键盘时完全一致, 不会因为隐藏而放大。
       **非目标手输入禁用**（v2.35, 2026-10-11 用户决策）: 目标在左手 → 右手键一律忽略
       （不产生 R1）, 反之同理 —— 防按错。
       纯位置认知, 数据仍记 canonical 键串。
@@ -203,7 +340,7 @@ v2.33 (2026-10-08): **完成提示只显示时间** —— 一击 `xxms`; 二击
   ① 单指一键 — 同一手指键区内只能取 1 键（如左食指 r/t/f/g/v/b 任两键不可同按）
   ② 跨行 ≤1  — 两键行距 2 几乎不可按（如 q+x）
   → 合法组合: 左右手各 78 (15 单 + 63 双); 拼读并击 51/44 是子集
-  + **3 键组合 1 个/手**: sdf(左) / jkl(右) = 同排三指顺指（唯一 3 键）。
+  + **3 键组合 1 个/手**: sdf(左) / lkj(右) = 同排三指顺指（唯一 3 键）。
     2026-09-30 用户决策: 它**不再是判定的参考锚**（判定改为"同角色、同键数组合的总体中心",
     见 分析-难度剔除.py `--ref pooled`）⇒ 采样**与 2 键同比例**（REF_BOOST=1.0, 不再 ×5）,
     数据作为副产品; 排除表仍拒绝排除它（保留唯一的 3 键数据点, 通用模型用）。
@@ -233,7 +370,7 @@ v2.33 (2026-10-08): **完成提示只显示时间** —— 一击 `xxms`; 二击
 
 计时: 每击每手记 fd/ld/fu/lu (ms, 相对试次首按); 主锚 = lu (全放=进解析时点)。
       单手采集时非活动手四锚恒为 0.0（列数恒 22: code + 16 锚 + error/err_type/actual/trial/session）。
-- 空格跳过; Esc 退出; 试次间随机延迟 300-800ms; --selftest / --smoke 自测
+- 空格跳过; Esc 退出; 试次间随机延迟 300-500ms (`ITI_MIN_MS`/`ITI_MAX_MS`); --selftest / --smoke 自测
 """
 import sys, time, random, argparse, json, traceback, math
 from collections import defaultdict
@@ -242,12 +379,13 @@ import tkinter as tk
 BASE = Path(__file__).resolve().parent    # 项目根 = 本脚本所在目录 (数据/排除表全落此, 整目录可迁移)
 sys.path.insert(0, str(BASE))
 from 采集核心 import (StrokeTrial, KeyboardCanvas, _hand,           # 引擎语义/GUI 组件唯一来源
-                     KEY_MARK, KEY_W, KEY_W_PRESS, R_KEY,            # 键位标记: 统一白色 + 按下加粗
-                     KEY_FRAME,                                       # 画布边框 = 固定中性 (v2.41)
+                     KEY_MARK, KEY_OK, KEY_BAD, KEY_W, R_KEY,        # 键位标记: 按下 = 绿/红 (v2.51)
+                     KEY_FRAME, ERR_FLASH_MS,                         # 边框: 中性 + 出错闪红 (v2.53)
                      N_STROKES, ime_detach, IS_WINDOWS,                # 输入层: 摘窗口 IME (v2.47)
                      app_is_foreground, claim_foreground,             # 前台自检/抢前台 (v2.37)
                      selftest as core_selftest)
-from 并击公共 import LEFT, RIGHT, LEFT_SET, RIGHT_SET                # 手别/键盘序唯一来源
+from 并击公共 import (LEFT, RIGHT, LEFT_SET, RIGHT_SET,              # 手别/键集唯一来源
+                     canon, combo_of)                              # 组合串唯一归一化 (槽位序)
 
 OUT = BASE / "当量数据.tsv"
 PRACTICE_OUT = BASE / "练习数据.tsv"
@@ -262,6 +400,9 @@ MIX_ONE_TWO = (1, 4)         # 混采比例 一击:二击 = 1:4 → P(1击)=1/5 
                              #   1 击试次 = 孤立角色 occ 测量 + 一击词(一级字/简词);
                              #   两类试次的稳定期**分别计算** (时间尺度不同, README §3.5)
 REFRESH_EVERY = 200          # 每 N 试次重载组合排除表 (动态剔除生效; v2.8)
+ITI_MIN_MS = 300             # 试次间隔 (inter-trial interval) 下限: 2026-10-13 用户
+ITI_MAX_MS = 500             #   「试次之间的间隔太长, 改成 300-500ms」(旧值 300-800)。只影响
+                             #   衔接节奏, 不在测时窗口内 (计时 t0 = 试次首按) ⇒ 数据侧零改动。
 CAPTURE_STUCK_S = 5.0        # 错误捕获态静默多久后自动收尾 (秒; v2.38 看门狗, 防永久卡住)
 TRIAL_STUCK_S = 20.0         # 正常试次静默多久后自动收尾 (秒; v2.38 看门狗, 防漏收松开事件)
 
@@ -281,10 +422,10 @@ TRIAL_STUCK_S = 20.0         # 正常试次静默多久后自动收尾 (秒; v2.
 
 
 # ── 组合空间 / 几何 / 参考组合: 来自共用模块 并击公共.py (口径唯一来源, 勿在此重复定义) ──
-from 并击公共 import LEFT_COMBOS, RIGHT_COMBOS, REF_COMBO, COMBO_W
+from 并击公共 import LEFT_COMBOS, RIGHT_COMBOS, REF_COMBO, COMBO_W, mirror_combo
 LEFT_COMBOS = list(LEFT_COMBOS)          # 副本 (共用模块常量已含 3 键组合, 勿原地改)
 RIGHT_COMBOS = list(RIGHT_COMBOS)
-# 3 键组合 (sdf/jkl) 采样权重倍数: 2026-09-30 起 = 1.0 (与 2 键同比例; 它不再是判定锚)
+# 3 键组合 (sdf/lkj) 采样权重倍数: 2026-09-30 起 = 1.0 (与 2 键同比例; 它不再是判定锚)
 REF_BOOST = 1.0                          # 保留常量: 实验脚本 (实验-剔除样本量.py) 仍引用
 
 # ── 组合排除表 (人工确认的最难组合, 从采样/练习空间剔除) ──
@@ -294,14 +435,20 @@ _REF3_WARNED = set()     # 3 键拒绝提示去重: 该规则是**静态**的, �
 
 
 def _refuse_ref3(c):
-    """3 键组合 (sdf/jkl) 拒绝排除 —— 保留唯一的 3 键数据点, 通用模型用; 提示每进程只说一次"""
+    """3 键组合 (sdf/lkj) 拒绝排除 —— 保留唯一的 3 键数据点, 通用模型用; 提示每进程只说一次"""
     if c not in _REF3_WARNED:
         _REF3_WARNED.add(c)
         print(f"排除表拒绝排除 3 键组合: {c} (保留唯一 3 键数据点, 通用模型用)")
 
 
 def load_excluded(path=EXCLUDE_PATH):
-    """每行一个组合 (# 注释); 返回 (左排除, 右排除) — 任意序/非法行容忍"""
+    """每行一个组合 (# 注释) → (左排除, 右排除)。
+
+    **v2.60 (2026-10-13 用户决策"由于剔除是对称的，以后在写表和汇报时只需要写左手的组合键位，
+    右手由代码推导")**: 表里**只写左手组合**, **右手 = `并击公共.mirror_combo(左)` 自动推导**
+    ⇒ 判定单位 = 镜像对, 表的可读性与一致性都由构造保证。
+    容错: 若某行写成了右手组合 (迁移期/手写), 自动按它的镜像补到左手集合 (并打印一行提示) ——
+    不会因为"写错手"而静默漏剔。3 键参考 (sdf/lkj) 仍拒绝排除 (唯一 3 键数据点, 由采集侧自封顶)。"""
     lex, rex = set(), set()
     if not Path(path).exists():
         return lex, rex
@@ -312,22 +459,28 @@ def load_excluded(path=EXCLUDE_PATH):
         if len(set(s)) != len(s) or not set(s) <= KEYS:
             print(f"排除表忽略无效行: {line!r}")
             continue
+        left_form = None
         if set(s) <= LEFT_SET:
-            c = ''.join(sorted(s, key=LEFT.find))
+            c = canon(s)
             if c == REF_COMBO['l']:
                 _refuse_ref3(c)
             elif c in LEFT_COMBOS:
-                lex.add(c)
+                left_form = c
             else:
                 print(f"排除表忽略非法左组合: {line!r}")
         else:
-            c = ''.join(sorted(s, key=RIGHT.find))
+            c = canon(s)
             if c == REF_COMBO['r']:
                 _refuse_ref3(c)
             elif c in RIGHT_COMBOS:
-                rex.add(c)
+                left_form = mirror_combo(c)
+                print(f"排除表提示: {c} 是右手组合 ⇒ 已按镜像对推导为左手 {left_form} "
+                      f"(表建议只写左手组合; v2.60)")
             else:
                 print(f"排除表忽略非法右组合: {line!r}")
+        if left_form:
+            lex.add(left_form)
+            rex.add(mirror_combo(left_form))            # 右手 = 左手镜像 (对称剔除)
     return lex, rex
 
 _EX_L, _EX_R = load_excluded()
@@ -343,57 +496,6 @@ def refresh_excluded(path=EXCLUDE_PATH):
     _EX_L, _EX_R = lex, rex
     LEFT_ACTIVE  = [c for c in LEFT_COMBOS  if c not in _EX_L]
     RIGHT_ACTIVE = [c for c in RIGHT_COMBOS if c not in _EX_R]
-    return True
-
-# ── 组合降权表 (③ 软降权: 疑似出局 → 采样权重 ×系数; 2026-09-30) ──
-WEIGHT_PATH = BASE / "组合降权表.txt"
-
-def load_weights(path=WEIGHT_PATH):
-    """组合降权表 (`组合<TAB>权重`, # 注释) → {组合: 系数}; 权重 1 = 不降权。
-    非法行/超界值容忍 (打印并忽略); 权重 0 视为"要硬剔", 请改用排除表 ⇒ 这里忽略之。"""
-    out = {}
-    if not Path(path).exists():
-        return out
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
-        low = line.strip().lower()
-        if low.startswith("#"):
-            continue
-        # 只按空白切分: 逗号是合法键名 (右手 ",/"/";," 等双键), 不能当分隔符替换掉
-        parts = line.split("#")[0].split()
-        if not parts:
-            continue
-        if len(parts) != 2:
-            print(f"降权表忽略无法解析的行: {line!r}")
-            continue
-        s, w = parts[0], parts[1]
-        if len(set(s)) != len(s) or not set(s) <= KEYS:
-            print(f"降权表忽略无效行: {line!r}")
-            continue
-        c = (''.join(sorted(s, key=LEFT.find)) if set(s) <= LEFT_SET
-             else ''.join(sorted(s, key=RIGHT.find)))
-        if c not in LEFT_COMBOS and c not in RIGHT_COMBOS:
-            print(f"降权表忽略非法组合: {line!r}")
-            continue
-        try:
-            f = float(w)
-        except ValueError:
-            print(f"降权表忽略非数值权重: {line!r}")
-            continue
-        if not 0.0 < f <= 1.0:
-            print(f"降权表权重须在 (0,1] (剔除请用排除表): {line!r}")
-            continue
-        out[c] = f
-    return out
-
-_WEIGHTS = load_weights()
-
-def refresh_weights(path=WEIGHT_PATH):
-    """动态重载降权表 (与分析-难度剔除.py 的改写同步; 每 REFRESH_EVERY 试次)"""
-    global _WEIGHTS
-    w = load_weights(path)
-    if w == _WEIGHTS:
-        return False
-    _WEIGHTS = w
     return True
 
 HEADER = (["code"]
@@ -419,7 +521,7 @@ def load_counts(path):
             if not strokes[0]:
                 continue
             for h, side in (('l', LEFT_SET), ('r', RIGHT_SET)):
-                cs = [''.join(c for c in s if c in side) for s in strokes]
+                cs = [combo_of(s, h) for s in strokes]
                 if not cs[0]:
                     continue
                 hand_singles[(h, cs[0])] += 1
@@ -427,11 +529,46 @@ def load_counts(path):
                     hand_pairs[(h, cs[0], cs[1])] += 1
     return hand_pairs, hand_singles
 
+
+# ── 3 键组合 (sdf/lkj) 的采集范围与上限 (v2.58, 2026-10-12 用户决策) ────────────────
+# 用户原话: "三键的采集范围缩小到一击，且采集满 100 个/手后不再采集（先到先停）"
+#   · **只在一击 (iso) 试次里抽**: 2 击试次的两击都不再抽 3 键 ⇒ 2 击的采样空间 79 → 78 /手;
+#   · **每手封顶 TRI_CAP_PER_HAND = 100 个** (只数**成功行**; 错误行不占采样) ⇒ 满了就从池里移除;
+#     两手**各自计数, 先到先停** (一手满了不影响另一手)。
+# ⚠ 与"排除表拒绝排除 3 键"不冲突: 那条管的是**表** (永不可剔), 这里管的是**采样预算**的自封顶。
+# 落地入口只有两处: `_sample_stroke(prev, allow_tri)` 的池过滤 + `_record` 的成功行累加。
+TRI_CAP_PER_HAND = 100
+
+def scan_tri_counts(path=OUT):
+    """启动现扫 当量数据.tsv 的 3 键组合**成功行**计数 → {"l": n, "r": n} (先到先停用)。
+    口径: 只数 `error=0` 的行 (错误行不占采样, 与覆盖计数/成功数同口径); 命中 = 该行某一段
+    就是该手的 3 键参考组合 (`REF_COMBO`: sdf/lkj); 1 击行与 2 击行的段都计入预算
+    (历史 2 击样本也占额度 —— 上限语义 = "这个组合一共采了多少个")。"""
+    cnt = {"l": 0, "r": 0}
+    if not Path(path).exists():
+        return cnt
+    with open(path, encoding="utf-8") as f:
+        hdr = f.readline().rstrip("\n").split("\t")
+        ci = hdr.index("code") if "code" in hdr else 0
+        ei = hdr.index("error") if "error" in hdr else -1
+        for line in f:
+            row = line.rstrip("\n").split("\t")
+            if len(row) <= ci or not row[ci]:
+                continue
+            if ei >= 0 and len(row) > ei and row[ei] != "0":
+                continue                                  # 错误行不计 (不占采样)
+            for h, side in (('l', LEFT_SET), ('r', RIGHT_SET)):
+                ref = REF_COMBO[h]
+                if any(combo_of(s, h) == ref for s in row[ci].split("|")):
+                    cnt[h] += 1
+    return cnt
+
+
 def _left_part(s):
-    return ''.join(c for c in s if c in LEFT_SET)
+    return combo_of(s, 'l')
 
 def _right_part(s):
-    return ''.join(c for c in s if c in RIGHT_SET)
+    return combo_of(s, 'r')
 
 # ── 练习进度持久化 ──
 def load_progress():
@@ -464,6 +601,8 @@ class ChordSpeedTest:
         self._header_written = OUT.exists() and OUT.stat().st_size > 0
         self._practice_header_written = PRACTICE_OUT.exists() and PRACTICE_OUT.stat().st_size > 0
         self.hand_pairs, self.hand_singles = load_counts(OUT)
+        # 3 键组合的已采成功数 (v2.58: 只在一击里抽 + 每手封顶 100, 先到先停; 启动现扫 + 每落一行累加)
+        self.tri_counts = scan_tri_counts(OUT)
         # 开局 = 每试次独立 50/50 随机抽边 (v2.50: 无欠账计数、无状态; choose_hand 定稿)
         self.hand = "right" if random.random() < 0.5 else "left"
         self.down = set()                      # GUI 级物理按下键集 (跨试次; 防自动重复误判)
@@ -475,40 +614,36 @@ class ChordSpeedTest:
         #   ③ `_start_next` 抛异常会让 phase 永久停在 "blocked" (此后按键被静默忽略);
         #   ④ 窗口不在前台时按键进不了采集器 ⇒ 界面"按了没反应"却毫无提示。
         # 现在: ①②③ 一律隔离 + 可见告警 (见 `_report_error`), ④ 靠**启动抢前台** + 看门狗兜底。
-        self.err_count = 0                     # 内部错误次数 (已隔离, 界面显示)
-        self.save_failures = 0                 # 落盘失败行数 (未保存的试次, 界面显示)
+        self.err_count = 0                     # 内部错误次数 (已隔离, 报在控制台)
+        self.save_failures = 0                 # 落盘失败行数 (未保存的试次, 报在控制台)
         self.key_events = 0                    # 本会话收到的按键事件数 (v2.43: 随控制台报错行输出)
         self._last_err = ""                    # 最近一次内部错误 (一行摘要)
+        self._warn_key = None                  # 上一次已打印的 (err_count, save_failures) —— 告警去重
+        self._gap_notified = False             # 本试次间隔已提示过"按键没被记录" (v2.52 防刷屏)
+        self._err_flashed = False              # 本试次已闪红过 (v2.53: 每试次只闪一次)
         self._last_key_ts = time.perf_counter()  # 最后一次收到按键的时刻 (看门狗用; v2.38)
         raw = load_progress()                  # 兼容旧格式 {组合: {"n":…}}
-        self.progress = {c: (v if isinstance(v, int) else v.get("n", 0))
-                         for c, v in raw.items()}
+        self.progress = {}                     # v2.61: 键经 canon 归一化 (槽位序) —— 旧口径的
+        for c, v in raw.items():               #   进度文件读进来不丢; 同组合两种写法取较大计数
+            k = canon(c)
+            n = v if isinstance(v, int) else v.get("n", 0)
+            self.progress[k] = max(self.progress.get(k, 0), n)
         self.session_id = time.strftime("%Y%m%d-%H%M%S")
 
         self.root.bind("<KeyPress>", self.on_press)
         self.root.bind("<KeyRelease>", self.on_release)
 
-        # ── 布局 (v2.43 精简 / v2.45 帮助面板 / v2.49 只剩 Trial N) ──
-        # 界面上只剩一行文字: 底部 `Trial N` (v2.41)。**采集量不上屏** (v2.49 用户决策: 让采集者
-        # 专心采集) —— 要核对就数 `当量数据.tsv` 的行; 记法说明与操作细节都在 **`?` 说明书**里 (v2.45)。
+        # ── 布局 (v2.43 精简 / v2.45 帮助面板 / v2.52 界面只剩键位图) ──
+        # **界面上只有键位图 + 右上 `?`** (v2.52): 试次号/完成时间/错误提示/告警**全部移到控制台**
+        # (原 label_block/label_info/label_warn 三行整体删除) —— 采集者只需看"要打什么",
+        # 其余信息在后台(命令行)按行输出。记法说明与操作细节仍在 **`?` 说明书**里 (v2.45)。
+        # v2.54: 键盘帧**填满窗口** (fill+expand) —— 键位图随窗口等比缩放 (KeyboardCanvas._relayout),
+        # 窗口默认 = 屏幕的一半宽×一半高 ⇒ 键位图比原来大得多
         kb_frame = tk.Frame(self.root, bg="#1e1e1e")
-        kb_frame.pack(pady=(10, 4))
+        kb_frame.pack(fill="both", expand=True, pady=(10, 12))
         self._build_keyboards(kb_frame)
 
-        self.label_info = tk.Label(self.root, text="", font=("Consolas", 14),
-                                    fg="#ccc", bg="#1e1e1e")
-        self.label_info.pack(pady=(6, 2))
-        # 告警行 (v2.43 精简): 只留**真问题** (内部错误 / 落盘失败 —— 都意味着数据或流程出事了);
-        # "窗口未获焦点"与"试次久未完成"两条提醒按用户决策删除 (采集者自己看得见屏幕, 不需要
-        # 程序反复念; 底层防护不变: 启动抢前台、看门狗自动收尾、异常隔离都还在)。
-        self.label_warn = tk.Label(self.root, text="", font=("Consolas", 12),
-                                    fg="#ff7b72", bg="#1e1e1e")
-        self.label_warn.pack(pady=2)
-        self.label_block = tk.Label(self.root, text="", font=("Consolas", 10),
-                                     fg="#555", bg="#1e1e1e")
-        self.label_block.pack(pady=(2, 12))
-
-        self._build_help()                     # `?` 图标 + 说明书面板 (v2.45)
+        self._build_help(kb_frame)              # `?` 图标 (落在键盘帧右上角) + 说明书面板 (v2.45)
 
         self._fit_geometry()
         self._set_window_title()
@@ -522,34 +657,55 @@ class ChordSpeedTest:
     # ── 键位图 (v2.26): 两击合并成一张 (默认) / --split 回退上下两块 ──
     def _build_keyboards(self, kb_frame):
         """合并图 (默认): **只有一块键盘** —— v2.45 起**图例行删除**: 记法说明 (「圈 = 第 1 击 /
-        叉 = 第 2 击 / 圈里一个叉 = 两击共用」) 收进 `?` 说明书 (`_toggle_manual`), 界面上只留
-        "要打什么" + 顶部计数行 + 底部 `Trial N`。图形规则在 KeyboardCanvas._paint (唯一源)。
+        叉 = 第 2 击 / 圈里一个叉 = 两击共用」) 收进 `?` 说明书 (`_toggle_manual`);
+        **v2.52 起界面上一个字都没有** (试次号/时间/错误/告警全在控制台) ⇒ 整个窗口只剩
+        "要打什么" + 右上 `?`。图形规则在 KeyboardCanvas._paint (唯一源)。
         --split: 旧布局 (2026-09-29) = 两击上下两块键盘 + 标题 + ↓ 箭头, 兼容旧协议
         (那两块图各自带"第 1 击/第 2 击"标题 —— 它标的是**块**, 不是记法, 保留)。"""
+        # v2.54: 每块画布 `sticky="nsew"` + 行列权重 ⇒ 画布随窗口伸缩, 自身再等比重排键位
+        kb_frame.columnconfigure(0, weight=1)
         if self.merge:
             self.kb = KeyboardCanvas(kb_frame)
-            self.kb.grid(row=0, column=0)
+            self.kb.grid(row=0, column=0, sticky="nsew")
+            kb_frame.rowconfigure(0, weight=1)
             return
         for idx in (0, 1):
             cap = tk.Label(kb_frame, text=f"第 {idx+1} 击", font=("Consolas", 12),
                            fg=KEY_MARK, bg="#1e1e1e")
             cap.grid(row=idx*3, column=0, pady=(0, 4))
             kb = KeyboardCanvas(kb_frame)
-            kb.grid(row=idx*3 + 1, column=0)
+            kb.grid(row=idx*3 + 1, column=0, sticky="nsew")
+            kb_frame.rowconfigure(idx*3 + 1, weight=1)          # 两块图各分一半高度
             setattr(self, f"kb{idx+1}", kb)
         tk.Label(kb_frame, text="↓", font=("Consolas", 20), fg="#666",
                  bg="#1e1e1e").grid(row=2, column=0)
 
-    def _fit_geometry(self):
-        """窗口 = 内容需求 (布局一改就不用再手改常数: 硬编码会过期 → 标签被裁; 冒烟有断言)"""
+    def _fit_geometry(self, ensure_content=False):
+        """窗口尺寸 (v2.56, 2026-10-12 用户决策 "默认窗口大小改成宽 1/3 屏幕, 高 1/4 屏幕"):
+        **默认 = 屏幕宽的 1/3 × 屏幕高的 1/4** (居中), 不小于内容需求 (否则控件会被裁; 冒烟有断言)。
+
+        键位图**随窗口等比缩放**并居中 (KeyboardCanvas._relayout) ⇒ 这里只管窗口多大, 不管图多大;
+        实际取哪一维顶住, 由键盘的长宽比 (432:138 ≈ 3.1) 与窗口的比决定 —— 本机 1920×1080 下
+        窗口 640×270 相对更"高", 于是**宽顶满、竖向留白**。用户想更大/更小直接拖边框。
+        (v2.55 那条"宽 = 刚好放下键盘"的算法随之作废; `?` 图标占横向一列、画布边框占 3px×2,
+        这些开销由 `_relayout` 自动吸收, 不需要在这里算。)
+
+        `ensure_content=True` (展开 `?` 说明书时) = **只放大不缩小**: 说明书面板要占地方,
+        但用户自己调过的窗口尺寸不该被程序收回去 (也不再移动窗口位置, 免得跳)。
+        ⚠ 只做几何 —— 报告/取目标/装输入层只在 __init__ 尾部走一次 (见下条教训)。"""
         self.root.update_idletasks()
-        w = max(520, self.root.winfo_reqwidth())        # 宽度下限: 键盘 428 + 余量
-        h = self.root.winfo_reqheight() + 16            # 高度: 内容 + 一点余量 (合并图比两图矮很多)
-        self.root.geometry(f"{w}x{h}")
-        # ⚠ 只做几何 —— 报告/取目标/装输入层只在 __init__ 尾部走一次:
-        #   曾误把初始化尾部粘进这里 ⇒ _setup_input 跑两遍 (当时 = 低层键盘钩子装了两道,
-        #   第一道成孤儿钩装着吞键却无人消费, `stop_hook` 也只卸最后一道) + 启动报告打印两遍。
-        #   钩子已于 v2.47 删除, 但这条教训仍适用: 重复初始化会重复挂周期任务/重复抢前台。
+        req_w, req_h = self.root.winfo_reqwidth(), self.root.winfo_reqheight()
+        if ensure_content:                              # 装得下就行; 已经更大的话别动它
+            w = max(self.root.winfo_width(), req_w)
+            h = max(self.root.winfo_height(), req_h)
+            self.root.geometry(f"{w}x{h}")
+            return
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        w, h = max(sw // 3, req_w), max(sh // 4, req_h)          # 屏幕的 1/3 宽 × 1/4 高
+        self.root.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2)}")
+        # ⚠ 旧教训 (与上面 docstring 同一条, 留档): 曾误把初始化尾部粘进这里 ⇒ `_setup_input` 跑两遍
+        #   (当时 = 低层键盘钩子装了两道, 第一道成孤儿钩装着吞键却无人消费) + 启动报告打印两遍。
+        #   钩子已于 v2.47 删除, 但教训仍适用: 重复初始化会重复挂周期任务/重复抢前台。
 
     # ── 输入层 (v2.47): **只保留"摘除窗口 IME"** ⇒ 无视输入法状态 ──
     # 背景 (2026-10-01 用户实测): 输入法处于中文态时, 字母先被 IME 拿去组字, tkinter 只收到
@@ -623,35 +779,103 @@ class ChordSpeedTest:
             if idle > CAPTURE_STUCK_S:
                 self.st.held.clear()            # 视同"全部放开" (物理状态 self.down 不动)
                 self.st.done = True
+                self._update_kb()               # v2.51: 松开后按下色 (绿/红) 不能让它在画布上留着
                 print(f"⚠ 错误捕获态静默 {idle:.1f}s → 自动收尾 (视为已全放; 错误行照常落盘, "
                       f"不再是永久卡住)", file=sys.stderr, flush=True)
                 self._record(ok=False)
                 self._schedule_next()
         elif self.phase == "typing" and not self.st.error and idle > TRIAL_STUCK_S:
             self.st.done = True
+            self._update_kb()                   # v2.51: 同 ① —— 收尾后不留"还按着"的绿/红
             print(f"⚠ 试次静默 {idle:.1f}s (疑似漏收松开事件) → 自动收尾", file=sys.stderr, flush=True)
             self._record(ok=True)
             self._schedule_next()
 
     def _err_text(self):
-        """错误提示 (v2.38): 捕获态要**明确告诉用户怎么脱身** —— 旧版只说 "✗ R1 …",
-        用户不知道程序在等"所有键放开", 于是按更多键/手不离键 ⇒ 永久卡住。"""
+        """错误提示 (v2.38; v2.52 起只进控制台): 捕获态要**明确告诉用户怎么脱身** —— 旧版只说
+        "✗ R1 …", 用户不知道程序在等"所有键放开", 于是按更多键/手不离键 ⇒ 永久卡住。"""
         t = "✗ " + (self.st.error or "")
         return t + "（全部松开即继续）" if (self.st is not None and self.st.capturing) else t
 
+    def _err_console(self):
+        """错误**即时**报控制台 (v2.52: 原为界面提示行)。
+
+        为什么必须当场说: 捕获态要等"所有键放开"才收尾 (2026-09-29 语义) —— 用户不知道在等
+        什么就会一直按/手不离键 (v2.38 实测"界面像卡死")。走 **stdout** = 与试次结果同一条
+        会话日志 (stderr 只留给真问题: 内部错误 / 落盘失败)。"""
+        print(f"✗ [Trial {self._trial_num()}] {self._err_text()}", flush=True)
+
+    def _err_notify(self):
+        """出错处理 (唯一入口): 控制台即时一行 + **键盘边框闪一下红** (v2.53)。
+
+        闪红是给"没在看控制台"的人看的非文字信号; **每试次只闪一次** (`_err_flashed` ——
+        捕获态里继续按键不再闪, 否则会一直在闪), 由 `new_code` 在新试次开头复位。"""
+        self._err_console()
+        if not self._err_flashed:
+            self._err_flashed = True
+            for kb in self._canvases():
+                kb.flash_error()
+
+    def _canvases(self):
+        """本实例的全部键位图 (合并图 = 一块 / --split = 上下两块) —— 需要"对每块都做"时用它"""
+        return (self.kb,) if self.merge else (self.kb1, self.kb2)
+
+    def _timing_text(self):
+        """本试次的时间文本 (v2.52: 从界面提示行迁到控制台)。
+
+        1 击 = `xxms` (孤立占用 occ = fd→lu); 2 击 = `a+b+c=xxms` (S1+S2+S3 = wc)——
+        三段**各自取整后相加** ⇒ 控制台里的算式恒自洽 (落盘仍用未取整浮点, 差 <1.5ms)。
+        该手本试次无锚 (异常/空试次) → `-`。"""
+        h = 'l' if self.hand == "left" else 'r'
+        a1, a2 = self._hand_anchor(1, h), self._hand_anchor(2, h)
+        if a1 is None:          # 防御: 该手本试次无键 (正常流程不会发生, 采样恒属当前手)
+            h = 'r' if h == 'l' else 'l'
+            a1, a2 = self._hand_anchor(1, h), self._hand_anchor(2, h)
+        if a1 is None:
+            return "-"
+        if a2:                  # 二击词: wc = S1+S2+S3 = fd1→lu2
+            s1 = round((a1[3] - a1[0]) * 1000)
+            s2 = round((a2[0] - a1[3]) * 1000)
+            s3 = round((a2[3] - a2[0]) * 1000)
+            return f"{s1}+{s2}+{s3}={s1 + s2 + s3}ms"
+        return f"{round((a1[3] - a1[0]) * 1000)}ms"     # 一击词: occ = fd→lu
+
+    def _trial_line(self, ok, saved):
+        """一次试次的**后台日志行** (v2.52, 原为界面上的 `Trial N` + 完成时间 + 错误提示):
+
+        `[Trial 43] l sf|xc  ok  120+95+130=345ms` / `[Trial 43] l sf  ok  160ms` /
+        `[Trial 44] l sf|dg  ✗ R1@2 键序错误: d ｜ 实际 sf|dg` (+ `⚠ 未落盘` = 该行没写进文件)。
+        `Trial N` 与落盘行的 `trial` 列**同源** (`_trial_num()`) ⇒ 日志与数据可逐行对账。"""
+        code = "|".join(self.code_strokes)
+        if ok:
+            body = f"ok  {self._timing_text()}"
+        else:
+            body = f"✗ {self.st.err_tag} {self.st.error or ''}".rstrip()
+            act = self.st.actual_str()
+            if act:
+                body += f" ｜ 实际 {act}"          # 错误行才有的"实际输入" (分析侧最需要的部分)
+        return (f"[Trial {self._trial_num()}] {'l' if self.hand == 'left' else 'r'} {code}  {body}"
+                + ("" if saved else "  ⚠ 未落盘"))
+
     def _refresh_warn(self):
-        """告警行 (v2.43 精简) = **只报真问题**: 内部错误 / 落盘失败 —— 两者都意味着"数据可能
-        少了一段"或"流程出过事", 必须当场看得见。
-        (v2.37 的"窗口未获焦点"与"试次久未完成"两条提示**已按用户决策删除** —— 采集者本人
-        看得见屏幕与自己的手; 底层防护不受影响: 启动抢前台、看门狗自动收尾、异常隔离仍在。)"""
-        if not hasattr(self, "label_warn"):
+        """告警 = **只报真问题**: 内部错误 / 落盘失败 (v2.52: 从界面告警行迁到控制台, 打到 stderr)。
+
+        两者都意味着"数据可能少了一段"或"流程出过事", 必须当场看得见; 普通试次结果走 stdout,
+        所以 **stderr = 真问题** 这条分界仍然清楚 (v2.43 的原则不变, 只换了通道)。
+        (v2.37 的"窗口未获焦点"与"试次久未完成"两条提示已按用户决策删除 —— 采集者本人看得见
+        自己的手与屏幕; 底层防护不受影响: 启动抢前台、看门狗自动收尾、异常隔离仍在。)
+        ⚠ 打的是**累计态**, 但只在计数**变化时**打印一次 (否则每次按键出错都重印一遍旧信息)。"""
+        key = (self.err_count, self.save_failures)
+        if key == self._warn_key:
             return
+        self._warn_key = key
         msgs = []
         if self.err_count:
-            msgs.append(f"⚠ 内部错误×{self.err_count}: {self._last_err} (已跳过, 全栈见控制台)")
+            msgs.append(f"⚠ 内部错误×{self.err_count}: {self._last_err} (已跳过, 全栈见上方)")
         if self.save_failures:
             msgs.append(f"⚠ 落盘失败 {self.save_failures} 行 —— 这些试次没有保存")
-        self.label_warn.config(text="  ｜  ".join(msgs))
+        if msgs:
+            print("  ｜  ".join(msgs), file=sys.stderr, flush=True)
 
     def _report_error(self, where, exc=None):
         """内部错误统一上报 (v2.37): 控制台打全栈 + 界面状态行显示 —— 一切静默失败都变成可见。
@@ -669,7 +893,7 @@ class ChordSpeedTest:
         try:
             self._refresh_warn()
         except Exception:
-            pass                       # 界面不可用也不能让上报本身成为新的异常源
+            pass                       # 上报本身出错也不能成为新的异常源 (控制台没了也一样)
 
     def _append_line(self, path, row):
         """追加一行; 落盘失败**不中断采集** (v2.37) —— 旧版直接抛, 一次 OneDrive/杀软/Excel
@@ -700,8 +924,14 @@ class ChordSpeedTest:
         """停掉周期任务与 IME 重摘 (退出前必调; v2.47 前这里卸的是键盘钩子)
 
         ⚠ `_running = False` 之后 `_focus_guard` / `_ime_guard` 的下一次 `after` 回调直接返回
-        ⇒ 周期任务链止住 (否则同一进程里连续冒烟三次会叠三套看门狗)。"""
+        ⇒ 周期任务链止住 (否则同一进程里连续冒烟三次会叠三套看门狗)。
+        v2.53: 顺带把**出错闪红**的复原定时器收掉 (退出时画布可能正红着; 幂等, 没在闪也安全)。"""
         self._running = False
+        try:
+            for kb in self._canvases():
+                kb.flash_end()             # 幂等; 画布可能正红着 (出错后未到复原时刻)
+        except Exception:
+            pass                           # 窗口已销毁/尚未建画布等情况: 清理失败不影响退出
 
     # ── 表头 ──
     def _write_header(self):
@@ -729,7 +959,7 @@ class ChordSpeedTest:
         self.root.title(f"并击击键测速（{mode}）")
 
     # ── `?` 说明书 (v2.45, 2026-10-12 用户决策"用法单独写一个说明书…放一个问号图标, 点击可以展开说明") ──
-    def _build_help(self):
+    def _build_help(self, kb_frame):
         """右上角 `?` 图标 + 说明书抽屉 (默认收起, 点开才占地方)。
 
         说明书是**独立文档** `采集器说明书.md` (项目根, 与代码同目录 ⇒ 整目录可迁移) ——
@@ -747,12 +977,13 @@ class ChordSpeedTest:
         self.manual_text.configure(yscrollcommand=bar.set)
         bar.pack(side="right", fill="y")
         self.manual_text.pack(side="left", fill="both", expand=True)
-        # 图标 = 小圆圈 + "?" (与键位图同为"圆"语言); place 到右上角 (窗口长高也贴角)
-        self.btn_help = tk.Canvas(self.root, width=20, height=20, bg="#1e1e1e",
+        # 图标 = 小圆圈 + "?" (与键位图同为"圆"语言); v2.54 起 grid 到**键盘帧右上角**
+        # (画布现在填满窗口 ⇒ 旧的 place 到窗口角会压在键位图上; grid 独占一列 ⇒ 永不重叠)
+        self.btn_help = tk.Canvas(kb_frame, width=20, height=20, bg="#1e1e1e",
                                   highlightthickness=0, cursor="hand2")
         self._help_ring = self.btn_help.create_oval(2, 2, 18, 18, outline="#555", width=1)
         self.btn_help.create_text(10, 10, text="?", fill="#999", font=("Consolas", 11, "bold"))
-        self.btn_help.place(relx=1.0, x=-8, y=8, anchor="ne")
+        self.btn_help.grid(row=0, column=1, sticky="ne", padx=(4, 2), pady=(2, 0))
         self.btn_help.bind("<Button-1>", self._toggle_manual)
 
     def _toggle_manual(self, _ev=None):
@@ -774,7 +1005,7 @@ class ChordSpeedTest:
             self.manual_open = True
         self.btn_help.itemconfig(self._help_ring,
                                 outline="#999" if self.manual_open else "#555")  # 图标高亮 = 已展开
-        self._fit_geometry()
+        self._fit_geometry(ensure_content=self.manual_open)   # 展开时只保证装得下 (v2.54)
 
     def _read_manual(self):
         """说明书正文 (Markdown) = `采集器说明书.md` (项目根); 缺失/读失败 → 返回可见的提示文本"""
@@ -814,22 +1045,30 @@ class ChordSpeedTest:
     def _startup_report(self):
         print("  · 键位图: " + ("两击**合并为一张**, **图形区分击序** (v2.40: 第 1 击 = 圈 / "
                                "第 2 击 = 叉<长 = 圈直径, 端点落在圈上> / 共有 = 圈里一个叉; "
-                               "标记统一白色, 按下 = 加粗高亮、松开恢复; **不提示当前击次** <v2.41; v2.45 起**无图例行**, "
-                               "记法说明见右上 `?` (采集器说明书.md)> "
+                               "**按下反馈 = 颜色** <v2.51: 按下当前该打的键 → 该击图形变绿, "
+                               "共键第 1 击绿圈/第 2 击绿叉; 按不该打的键 → 红; 线宽恒定不再加粗>; "
+                               "**界面只有键位图 + 右上 `?`** <v2.52: 试次号/完成时间/错误提示/"
+                               "告警全部移到控制台 (本窗口), 记法说明见右上 `?`> "
                                "—— v2.26 合并 + "
-                               "v2.32 圆形键帽 + v2.31 半边键盘, --split 可回到两图"
+                               "v2.32 圆形键帽 + v2.31 半边键盘 <v2.57 恢复: 只画采集手那一半>, "
+                               "--split 可回到两图> "
+                               "· **窗口默认 = 屏幕 1/3 宽×1/4 高, 键位图等比缩放进窗口** <v2.56>"
                                if self.merge else
                                "两击**上下两块**图 (旧布局 2026-09-29; v2.26 默认已改合并; "
-                               "v2.40 上块 = 圈 / 下块 = 叉)"))
+                               "v2.40 上块 = 圈 / 下块 = 叉; v2.51 按下 = 绿/红)"))
+        print("  · 后台日志 (v2.52): 每试次一行 `[Trial N] 手 组合 ok 时间` / 错误行带 `✗ 规则@击序` "
+              "与「实际输入」; 跳过与间隔按键也在此明示 —— 界面不再显示这些。")
+        print(f"  · 出错信号 (v2.53): 键盘边框闪红 {ERR_FLASH_MS}ms (非文字; 与「按错的键」同色) —— "
+              "界面无文字时的唯一即时反馈。")
         h = 'l' if self.hand == "left" else 'r'
         act = self._combos_of_hand(h)
         ref = REF_COMBO[h]
         print(f"组合空间({h}手): {len(act)} 活跃 / {len(self._combos_all(h))} 合法"
               f" (3 键组合 {ref} 与 2 键同比例 ×{REF_BOOST:g}; 2026-09-30 起不再加权)")
-        dw = {c: _WEIGHTS[c] for c in act if _WEIGHTS.get(c, 1.0) < 1.0}
-        if dw:
-            print(f"软降权(③): {h}手 {len(dw)} 个组合按 组合降权表.txt 降权 "
-                  f"(疑似出局, ×{min(dw.values()):g}~{max(dw.values()):g}; 可回滚)")
+        n_tri = self.tri_counts.get(h, 0)
+        print(f"  · 3 键组合 ({ref}): **只在一击试次里抽** + 每手封顶 {TRI_CAP_PER_HAND} 个"
+              f" (先到先停) —— {h}手已采 {n_tri}/{TRI_CAP_PER_HAND}"
+              + (" ⇒ **本手已停** (该组合不再出现在抽样池)" if n_tri >= TRI_CAP_PER_HAND else ""))
         if self.practice:
             touched = sum(1 for c in act if self._n_practiced(c) > 0)
             total = sum(self._n_practiced(c) for c in act)
@@ -849,15 +1088,22 @@ class ChordSpeedTest:
 
     # ── 采样 ──
     def _combo_w(self, combo):
-        """结构权重 (单键:双键:三键 = 2:1:1) × **软降权系数** (③; 未列入降权表 = 1.0)。
-        2026-09-30: 3 键组合不再额外加权; 疑似出局的组合按 组合降权表.txt 降权 (可回滚)。
+        """结构权重 (单键:双键:三键 = 2:1:1)。
+        v2.59 (2026-10-12): **降权层整体删除** (用户"现在只需要一个排除表, 合并掉") —— 采样权重
+        只剩结构权重; 组合采不采由 组合排除表.txt 决定 (不在活跃池 = 完全不采)。
         (v2.39 清理: 旧签名多一个从未使用的 `h` 参数)"""
-        return COMBO_W[len(combo)] * _WEIGHTS.get(combo, 1.0)
+        return COMBO_W[len(combo)]
 
-    def _sample_stroke(self, prev=None):
-        """该手组合采样: 结构权重(单:双=2:1) × 降权系数 × 转移多样性 1/(n+1)"""
+    def _sample_stroke(self, prev=None, allow_tri=False):
+        """该手组合采样: 结构权重(单:双=2:1) × 转移多样性 1/(n+1)
+
+        `allow_tri` (v2.58, 2026-10-12 用户决策"三键的采集范围缩小到一击，且采集满 100 个/手后
+        不再采集（先到先停）"): **只有一击试次且该手 3 键未满 `TRI_CAP_PER_HAND`** 时才允许抽 3 键;
+        其余情形 (2 击试次的两击 / 该手已满) 池里直接没有 3 键。"""
         h = 'l' if self.hand == "left" else 'r'
         pool = self._combos_of_hand(h)
+        if not (allow_tri and self.tri_counts.get(h, 0) < TRI_CAP_PER_HAND):
+            pool = [c for c in pool if len(c) < 3]    # 3 键只在"未满的一击试次"里可抽
         part = _left_part if h == 'l' else _right_part
         if prev is None:
             cnt = lambda s: self.hand_singles.get((h, part(s)), 0)
@@ -877,28 +1123,26 @@ class ChordSpeedTest:
             strokes = [self._next_practice_combo()]
         else:
             n = random.choices((1, 2), weights=MIX_ONE_TWO, k=1)[0]   # 混采 1击:2击
-            strokes = [self._sample_stroke()]
+            strokes = [self._sample_stroke(allow_tri=(n == 1))]       # v2.58: 3 键只在一击里抽
             for _ in range(n - 1):
                 strokes.append(self._sample_stroke(strokes[-1]))
         self.code_strokes = strokes
         self.st = StrokeTrial(strokes)
         self.phase = "waiting"
+        self._gap_notified = False               # 新试次 ⇒ 间隔提示复位 (v2.52)
+        self._err_flashed = False                # 新试次 ⇒ 闪红额度复位 (v2.53)
         self._last_key_ts = time.perf_counter()  # 看门狗从本试次起点计时 (v2.38)
         self._paint_targets()
-        self._update_kb()                      # 也负责写试次行 "Trial N" (v2.41) 与按下态
-        self.label_info.config(text="")
+        self._update_kb()                      # 只刷新按下态 (v2.52: 界面已无试次号/时间/错误行)
 
     def _maybe_refresh_excluded(self):
-        """每 REFRESH_EVERY 试次重载 排除表 + 降权表 (分析-难度剔除.py 可随时改写, 即时生效)"""
+        """每 REFRESH_EVERY 试次重载**排除表** (分析-难度剔除.py 可随时改写, 即时生效)
+        v2.59: 降权表已删除 ⇒ 只剩一张表要刷。"""
         if self.total_trials and self.total_trials % REFRESH_EVERY == 0:
             h = 'l' if self.hand == "left" else 'r'
             if refresh_excluded():
                 print(f"[trial {self.total_trials}] 排除表已刷新: {h}手活跃组合 "
                       f"{len(self._combos_of_hand(h))}")
-            if refresh_weights():
-                n_dw = sum(1 for c in self._combos_of_hand(h) if _WEIGHTS.get(c, 1.0) < 1.0)
-                print(f"[trial {self.total_trials}] 降权表已刷新: {h}手降权组合 {n_dw} 个 "
-                      f"(疑似出局, 可回滚)")
 
     def _hand_anchor(self, stroke, hand):
         """该击该手 (fd, ld, fu, lu)；该手该击无键 → None (v2.6 三段口径取用)"""
@@ -907,32 +1151,38 @@ class ChordSpeedTest:
         return a if a[3] is not None else None
 
     def _update_kb(self):
-        # 试次行 (v2.41, 2026-10-11 用户决策"不需要提示击次了"): **只写 Trial N** —— 圈/叉已把
-        # 击序与击数写全 (只圈 = 1 击; 圈+叉 = 2 击, 圈在前叉在后), 不再用文字重复提示。
-        self.label_block.config(text=f"Trial {self._trial_num()}")
+        # v2.52: 试次号**不再上屏** (原 label_block 的 "Trial N" 整行删除) —— 试次号与完成时间
+        # 现在随 `_record` 的日志行打到控制台 (`_trial_line`, 与落盘行 `trial` 列同源)。
         # 按下态 = **正按着的键** (held, 松开即灭; v2.32 修) —— 旧用 downs (历史全部按下过
         # 的键, 只增不减), 击 1 的共键一放开就残留在按下集, 击序推进到 2 时瞬间被点亮成
         # "按着"(还没真的按第二击) ⇒ 共键"提前亮"; 普通键也会常亮不灭
+        # v2.51: 另把**当前正在打的那一击**交给画布 ⇒ 按下的键按"该不该打"上色 (绿/红),
+        # 共键只亮当前击的那一个图形 (第 1 击绿圈 / 第 2 击绿叉)。
+        si = self.st.si if self.st.si < self.st.n else None      # None = 试次已结束
         if self.merge:
             # 合并图: 目标由 _paint_targets 一次画好, 这里只更新按下态 (v2.41: 无"当前击"提示)
-            self.kb.mark_pressed(set(self.st.held))
+            self.kb.mark_pressed(set(self.st.held), stroke=si)
             return
         for idx, kb in enumerate((self.kb1, self.kb2)):
-            # 两块图各代表一击: 只把"当前击那块"的按下键点亮 (另一块没有按键输入)
+            # 两块图各代表一击: 只把"当前击那块"的按下键点亮 (另一块没有按键输入);
+            # 本块自己的击序就是 idx (set_targets 的 stroke_base) ⇒ 直接当"当前击"传下去
             kb.mark_pressed(set(self.st.held)
-                            if not (self.st.error or self.st.done) and self.st.si == idx else set())
+                            if not (self.st.error or self.st.done) and self.st.si == idx else set(),
+                            stroke=idx)
 
     def _paint_targets(self):
         """按当前目标画键位图 (合并图: 两击一张; **图形规则在 KeyboardCanvas._paint** ——
-        第 1 击 = 圈 / 第 2 击 = 叉 / 共有 = 圈里一个叉, 标记统一白色);
-        半边键盘 (v2.31): 只显示本试次采集手那一半, 键位保持原位
+        第 1 击 = 圈 / 第 2 击 = 叉 / 共有 = 圈里一个叉, 未按下时统一白色);
+        **半边键盘** (v2.31; **v2.55 曾撤销 → v2.57 恢复**): 只画本试次采集手那一半, 另一半整个
+        隐藏 —— 屏幕上的键少一半, 目标一眼就能找到 (用户 2026-10-12 "否则难以定位"); 手别另见窗口标题。
 
         v2.41: 不再有"当前击"状态 ⇒ 本方法只画目标 + 按下集复位, 画布内容**只由击序决定**
         (v2.39/v2.40 曾需要"先 set_active_stroke(0) 再画目标"来消掉逐击上色的中间态;
-        现在那条不变量退化成"图形与击序同源", 冒烟仍有"首笔 ≡ 后续状态"断言守着)。"""
+        现在那条不变量退化成"图形与击序同源", 冒烟仍有"首笔 ≡ 后续状态"断言守着)。
+        v2.51: "当前击"只影响**按下时的颜色** (由 `_update_kb` 传) ⇒ 本方法仍与击序无关。"""
         h = 'l' if self.hand == "left" else 'r'
         if self.merge:
-            self.kb.set_hand(h)
+            self.kb.set_hand(h)                                    # 半边隐藏 (v2.57 恢复)
             self.kb.set_strokes(self.code_strokes)
         else:
             self.kb1.set_hand(h)
@@ -992,15 +1242,19 @@ class ChordSpeedTest:
         if self._disabled_hand(ch):
             return
         if self.phase == "blocked":
-            # v2.38: 试次间隔 (300-800ms) 里按键一律丢弃 —— **必须说出来**。快打时用户会抢在
+            # v2.38: 试次间隔 (`ITI_MIN_MS`..`ITI_MAX_MS`, 现 300-500ms) 里按键一律丢弃 —— **必须说出来**。快打时用户会抢在
             # 新目标出现前按键, 那一击被静默丢掉 ⇒ 用户以为自己在打第 1 击、程序却还没开始,
             # 于是"按下的键突然变红"(其实那键是新试次第 2 击的目标) 这类错位。
-            if ch in KEYS:
-                self.label_info.config(text="⏳ 下一试次还没出现 —— 这一下没有被记录")
+            # v2.52: 这句话也进控制台 (界面已无文字行); 每个间隔**只提示一次** (防连打刷屏)。
+            if ch in KEYS and not self._gap_notified:
+                self._gap_notified = True
+                print(f"⏳ [Trial {self._trial_num()}] 下一试次还没出现 —— 这一下没有被记录",
+                      flush=True)
             return
         if ch == ' ':
+            n = self._trial_num()                  # 被跳过的这一试次号 (与落盘 trial 列同源)
             self.total_trials += 1
-            self.label_info.config(text="␣ 已跳过")
+            print(f"[Trial {n}] ␣ 已跳过 (空格) —— 不写入数据", flush=True)
             self._schedule_next()
             return
         if not ch or ch not in KEYS:
@@ -1011,12 +1265,12 @@ class ChordSpeedTest:
         self.st.press(ch, t)
         self._update_kb()
         if self.st.error and not self.st.capturing:
-            self.label_info.config(text=self._err_text())
-            self._record(ok=False)                 # R4: 触发即全放开, 立即收尾
+            self._err_notify()                     # R4: 触发即全放开, 立即收尾
+            self._record(ok=False)
             self._schedule_next()
         elif self.st.error:
-            # 错误捕获态: 错误立即提示, 但等全放开才落盘 (actual 才含完整错误组合)
-            self.label_info.config(text=self._err_text())
+            # 错误捕获态: 错误**立即**报控制台, 但等全放开才落盘 (actual 才含完整错误组合)
+            self._err_notify()
         elif self.st.final_formed and not self.st.done:
             if not hasattr(self, "_release_timeout"):
                 self._release_timeout = self.root.after(800, self._force_advance)
@@ -1035,55 +1289,32 @@ class ChordSpeedTest:
         self.st.release(ch, time.perf_counter() if t is None else t)
         self._update_kb()
         if self.st.error:
-            self.label_info.config(text=self._err_text())
+            self._err_notify()
             if self.st.done or not self.st.capturing:
                 self._record(ok=False)             # 捕获完成 (全放开) 或 R4 → 落盘
                 self._schedule_next()
         elif self.st.done:
             if self.practice:
                 self._on_practice_done()
-            else:
-                h = 'l' if self.hand == "left" else 'r'
-                a1 = self._hand_anchor(1, h)
-                a2 = self._hand_anchor(2, h)
-                if a1 is None:          # 防御: 该手本试次无键 (正常流程不会发生, 采样恒属当前手)
-                    h = 'r' if h == 'l' else 'l'
-                    a1 = self._hand_anchor(1, h)
-                    a2 = self._hand_anchor(2, h)
-                if a1 is None:          # 两只手都没有锚 (异常) → 只报完成, 不报 ms
-                    self.label_info.config(text="✓")
-                elif a2:    # 二击词: wc = S1+S2+S3 = fd1→lu2
-                    # 三段各自取整后再相加当总时间 —— 保证屏幕上"a+b+c=?"算式自洽
-                    # (真值 wc 用的是未取整浮点并照常落盘, 显示取整只差 <1.5ms)
-                    s1 = round((a1[3] - a1[0]) * 1000)
-                    s2 = round((a2[0] - a1[3]) * 1000)
-                    s3 = round((a2[3] - a2[0]) * 1000)
-                    self.label_info.config(text=f"{s1}+{s2}+{s3}={s1 + s2 + s3}ms")
-                else:       # 一击词: 孤立占用 occ = fd→lu
-                    self.label_info.config(text=f"{round((a1[3] - a1[0]) * 1000)}ms")
+            # v2.52: 完成时间由 `_record` 的日志行统一输出 (界面提示行已删) —— 不再在此算显示串
             self._record(ok=True)
             self._schedule_next()
 
     # ── 练习模式 (热身): 只记次数量与散布, 不设判据 ──
     def _on_practice_done(self):
         combo = self.code_strokes[0]
-        a = self.st.anchors()[0 if self.hand == "left" else 1]
-        if a[0] is None:                   # 防御: 该手本试次无键 (正常流程不会发生)
-            a = self.st.anchors()[1 if self.hand == "left" else 0]
-        fd, lu = a[0], a[3]
         self.progress[combo] = self._n_practiced(combo) + 1
         save_progress(self.progress)
-        # 提示与正式采集同口径: 只显示时间 (occ = fd→lu); 进度/散布仍在落盘与启动报告里
-        self.label_info.config(text="✓" if fd is None else f"{round((lu - fd) * 1000)}ms")
+        # v2.52: 时间/完成提示由 `_record` 的日志行统一输出 (练习与正式同口径)
 
     # ── 记录 ──
     def _record(self, ok):
-        """落盘一行并推进采样计数
+        """落盘一行 + 打一行后台日志 (v2.52: 试次号/完成时间/错误提示都在这行里) + 推进采样计数
 
         ⚠ v2.37 修复: 写盘走 `_append_line` (异常隔离) —— 旧版 `open(...,"a").write` 直接抛,
-        一次文件被占用 (OneDrive 同步/杀软/Excel) 就会打断当时的按键轮询链 (钩子, v2.47 已删)
-        ⇒ 界面静默卡死、且用户不知道这些试次根本没保存。现在: 写失败 → 界面红字告警 +
-        计数行显示 "落盘失败 N", 流程照常推进; **采样计数不推进** (文件里没有的行不能计入覆盖/手别欠账)。"""
+        一次文件被占用 (OneDrive 同步/杀软/Excel) 就会打断当时的控制流 ⇒ 试次静默丢失。
+        现在: 写失败 → stderr 告警 + 日志行标 `⚠ 未落盘` (v2.52), 流程照常推进;
+        **采样计数不推进** (文件里没有的行不能计入覆盖)。"""
         anchors = self.st.anchors()
         fmt = lambda v: f"{v*1000:.1f}" if v is not None else "0.0"
         if self.practice:
@@ -1106,11 +1337,20 @@ class ChordSpeedTest:
                 h = 'l' if self.hand == "left" else 'r'
                 if ok:                           # 采样覆盖只计**已保存**的正确试次 (未落盘的不算证据)
                     ss = self.code_strokes
-                    side = LEFT_SET if h == 'l' else RIGHT_SET
-                    cs = [''.join(c for c in s if c in side) for s in ss]
+                    cs = [combo_of(s, h) for s in ss]
                     self.hand_singles[(h, cs[0])] += 1
                     if len(cs) > 1:              # 1 击行不计击对 (孤立试次无转移)
                         self.hand_pairs[(h, cs[0], cs[1])] += 1
+                    ref = REF_COMBO[h]           # 3 键封顶计数 (v2.58: 只数成功行, 与 scan_tri_counts 同口径)
+                    if ref in cs:
+                        self.tri_counts[h] = self.tri_counts.get(h, 0) + 1
+                        if self.tri_counts[h] == TRI_CAP_PER_HAND:
+                            print(f"3 键组合 {ref} 已达上限 {TRI_CAP_PER_HAND}/手 ({h}手) ⇒ 停止采集它 "
+                                  f"(先到先停; 只在**一击**里采, 另一手不受影响)", flush=True)
+        # 后台日志行 (v2.52): 试次号 + 手别 + 组合 + ok/错误 + 时间 —— 与落盘行的 `trial` 列同源,
+        # 逐行可对账; `⚠ 未落盘` = 这一行没进文件 (落盘失败, 上面已打 stderr 告警)。
+        # ⚠ 必须在 `total_trials` 自增**之前**打 (`_trial_num()` = total_trials + 1 = 本试次号)。
+        print(self._trial_line(ok, saved), flush=True)
         self.recorded += 1 if saved else 0
         self.total_trials += 1
         self._cancel_release_timeout()
@@ -1143,8 +1383,9 @@ class ChordSpeedTest:
 
     def _schedule_next(self, delay_ms=None):
         if delay_ms is None:
-            delay_ms = random.randint(300, 800)
+            delay_ms = random.randint(ITI_MIN_MS, ITI_MAX_MS)
         self.phase = "blocked"
+        self._gap_notified = False             # 新间隔开始 ⇒ "这一下没被记录"可再提示一次 (v2.52)
         self._next_handle = self.root.after(delay_ms, self._start_next)
 
     def _start_next(self):
@@ -1170,45 +1411,95 @@ def selftest():
     """核心自测 (状态机/组合空间) + 本工具专属 (排除表/混采/参考占比)"""
     core_selftest()
     import tempfile
-    # 排除表解析: 任意序 / 非法行容忍 / 归一化
+    # 排除表解析 (v2.60: **条目只写左手, 右手 = mirror_combo 推导**): 任意序 / 非法行容忍 /
+    #   右手行容错归一 / 镜像自动补全。`gq`/`j.` = **旧口径写法** (键盘行序) ⇒ 兼作 canon 容错回归
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as tf:
         tf.write("# 注释\nqg\ngq\nxx\nj.\nrt\n")
         tpath = tf.name
     lex, rex = load_excluded(Path(tpath))
-    assert lex == {'qg'} and rex == {'j.'}, (lex, rex)      # gq→qg 归一; xx/rt 非法忽略
+    assert lex == {'qg', mirror_combo('.j')}, (lex, rex)    # gq→qg 归一; .j 是右手 ⇒ 镜像补左
+    assert rex == {mirror_combo('qg'), '.j'}, (lex, rex)    # 右手集合 = 左手集合的镜像 (对称保证)
+    assert all(mirror_combo(c) in rex for c in lex), (lex, rex)
     Path(tpath).unlink()
-    # 排除表拒绝排除 3 键组合 (唯一 3 键数据点, 保留)
+    # 排除表拒绝排除 3 键组合 (唯一 3 键数据点, 保留) —— 左右都拒
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as tf:
-        tf.write("sdf\njkl\nqg\n")
+        tf.write("sdf\nlkj\nqg\n")
         tpath = tf.name
     lex, rex = load_excluded(Path(tpath))
-    assert lex == {'qg'} and rex == set(), (lex, rex)
+    assert lex == {'qg'} and rex == {mirror_combo('qg')}, (lex, rex)
     Path(tpath).unlink()
+    assert len(lex) == len(rex) and all(mirror_combo(c) in rex for c in lex), "左右必须对称"
     assert len(LEFT_ACTIVE) <= len(LEFT_COMBOS) and len(RIGHT_ACTIVE) <= len(RIGHT_COMBOS)
     # 混采比例: P(1击) 由 MIX_ONE_TWO 唯一决定 (改常量不必改自测; v2.34 起 = 1:4 ⇒ 1/5)
     random.seed(0)
     p1 = MIX_ONE_TWO[0] / sum(MIX_ONE_TWO)
     n1 = sum(random.choices((1, 2), weights=MIX_ONE_TWO, k=1)[0] == 1 for _ in range(30000))
     assert abs(n1 / 30000 - p1) < 0.02, (n1 / 30000, p1)
-    # 3 键组合 (sdf/jkl) 采样占比 = 与 2 键同比例 (2026-09-30 起不再加权; 分析不依赖它)
+    # 3 键组合 (sdf/lkj) 采样占比 = 与 2 键同比例 (2026-09-30 起不再加权; 分析不依赖它)
     w = [COMBO_W[len(c)] * (REF_BOOST if c == REF_COMBO['l'] else 1.0) for c in LEFT_COMBOS]
     share = REF_BOOST * COMBO_W[3] / sum(w)
     two_key_share = COMBO_W[2] / sum(w)
     assert REF_BOOST == 1.0 and abs(share - two_key_share) < 1e-9, (share, two_key_share)
-    # 降权表解析 (③ 软降权): 归一化 / 非法行容忍 / 权重 0 与越界值忽略 / 有效权重乘进采样
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as tf:
-        tf.write("# 组合降权表\nqg\t0.25\nsd 0.5\nxx 0.1\nzf\t0.0\ncv\t1.5\ngq\t0.3\n"
-                 "# [manual]\ndg\t0.1\n")
+    # v2.58 (2026-10-12 用户决策"三键的采集范围缩小到一击，且采集满 100 个/手后不再采集（先到先停）")
+    #   · 池过滤: 只有 allow_tri=True (一击试次) 且该手未满 ⇒ 3 键才在池里
+    #   · scan_tri_counts: 只数成功行 (错误行不占采样); 两手各自计数
+    app3 = object.__new__(ChordSpeedTest)
+    app3.hand = "left"
+    app3.hand_singles, app3.hand_pairs = defaultdict(int), defaultdict(int)
+    app3.tri_counts = {"l": 0, "r": 0}
+    n_tri = sum(len(ChordSpeedTest._sample_stroke(app3, allow_tri=True)) == 3
+                for _ in range(4000))
+    assert n_tri > 0, "一击且未满时应能抽到 3 键"
+    assert all(len(ChordSpeedTest._sample_stroke(app3)) < 3 for _ in range(4000)), \
+        "2 击试次 / 未传 allow_tri ⇒ 池里不得有 3 键"
+    assert all(len(ChordSpeedTest._sample_stroke(app3, prev="q")) < 3 for _ in range(2000)), \
+        "2 击的第 2 击 (带 prev) 不得抽 3 键"
+    app3.tri_counts["l"] = TRI_CAP_PER_HAND
+    assert all(len(ChordSpeedTest._sample_stroke(app3, allow_tri=True)) < 3 for _ in range(4000)), \
+        "该手满 100 ⇒ 一击也不再抽 3 键 (先到先停)"
+    app3.tri_counts["l"] = 0
+    assert sum(len(ChordSpeedTest._sample_stroke(app3, allow_tri=True)) == 3
+               for _ in range(4000)) > 0, "复位后 (未满) 一击应能重新抽到 3 键"
+    #   端到端: `new_code` 抽出的试次里, 3 键**只出现在一击试次** (2 击试次的两击都不含它)
+    app4 = object.__new__(ChordSpeedTest)
+    app4.hand = "left"; app4.practice = False
+    app4.hand_singles, app4.hand_pairs = defaultdict(int), defaultdict(int)
+    app4.tri_counts = {"l": 0, "r": 0}
+    app4._cancel_release_timeout = lambda: None
+    app4._maybe_refresh_excluded = lambda: None
+    app4.choose_hand = lambda: "left"
+    app4._set_window_title = lambda: None
+    app4._paint_targets = lambda: None                   # GUI 绘图不参与 (只验抽签)
+    app4._update_kb = lambda: None
+    app4.total_trials = 0
+    bad2, n1_tri = 0, 0
+    for _ in range(4000):
+        ChordSpeedTest.new_code(app4)
+        if len(app4.code_strokes) == 1:
+            n1_tri += int("sdf" in app4.code_strokes)
+        elif "sdf" in app4.code_strokes:
+            bad2 += 1
+    assert bad2 == 0 and n1_tri > 0, (bad2, n1_tri)       # 2 击试次含 3 键的次数必须为 0
+    with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False, encoding="utf-8") as tf:
+        tf.write("code\tfd\tld\tfu\tlu\terror\terr_type\tactual\ttrial\tsession\n")
+        tf.write("sdf\t1\t2\t3\t4\t0\t\t\t1\ts\n")            # 左手 3 键成功
+        tf.write("lkj\t1\t2\t3\t4\t0\t\t\t2\ts\n")            # 右手 3 键成功
+        tf.write("sdf|lkj\t1\t2\t3\t4\t1\tR1\t\t3\ts\n")      # 错误行 ⇒ 不计
+        tf.write("qg|lkj\t1\t2\t3\t4\t0\t\t\t4\ts\n")         # 右手 3 键 (第 2 击) 成功 ⇒ 计
         tpath = tf.name
-    ws = load_weights(Path(tpath))
-    assert ws == {"qg": 0.3, "sd": 0.5, "dg": 0.1}, ws   # gq→qg 后者覆盖; xx/0.0/1.5 忽略
+    tc = scan_tri_counts(Path(tpath))
+    assert tc == {"l": 1, "r": 2}, tc                        # 错误行不计; 2 击里的 3 键计入预算
     Path(tpath).unlink()
-    app = object.__new__(ChordSpeedTest)                  # 只验 _combo_w 的乘子 (不建 GUI)
-    globals()["_WEIGHTS"] = {"qg": 0.25}
-    assert abs(ChordSpeedTest._combo_w(app, "qg") - COMBO_W[2] * 0.25) < 1e-12
-    assert ChordSpeedTest._combo_w(app, "zf") == COMBO_W[2]                # 未列入 = 1.0
+    tc_real = scan_tri_counts(OUT)                           # 真实文件现扫 (只读)
+    assert set(tc_real) == {"l", "r"} and all(isinstance(v, int) and v >= 0
+                                              for v in tc_real.values()), tc_real
+    # v2.59: 降权层整体删除 —— 相关符号必须真的不存在; 采样权重只剩结构权重
+    for name in ("_WEIGHTS", "load_weights", "refresh_weights", "WEIGHT_PATH"):
+        assert name not in globals(), f"{name} 应随 v2.59 删除"
+    app = object.__new__(ChordSpeedTest)                  # _combo_w = 纯结构权重 (无降权乘子)
+    assert ChordSpeedTest._combo_w(app, "qg") == COMBO_W[2]
+    assert ChordSpeedTest._combo_w(app, "zf") == COMBO_W[2]
     assert ChordSpeedTest._combo_w(app, REF_COMBO['l']) == COMBO_W[3]
-    globals()["_WEIGHTS"] = {}
     # 双手混采 (v2.50): 每试次**独立 50/50**, 无欠账、无状态 —— 累计比例自然收敛, 两侧始终交错
     rng2 = random.Random(20261012)
     seq = ['r' if rng2.random() < 0.5 else 'l' for _ in range(4000)]
@@ -1227,7 +1518,8 @@ def selftest():
     sig = list(inspect.signature(ChordSpeedTest.__init__).parameters)
     assert sig == ["self", "practice", "root", "merge", "ime"], sig
     print(f"工具自测通过: 排除表(含保留 3 键组合) / 混采 1击:2击={MIX_ONE_TWO[0]}:{MIX_ONE_TWO[1]} / "
-          f"3 键组合与 2 键同比例 {100*share:.2f}% / 降权表(权重乘进采样) / "
+          f"3 键组合与 2 键同比例 {100*share:.2f}% / 权重=纯结构权重(降权层已删) / "
+          f"3 键只在一击抽 + 每手封顶 {TRI_CAP_PER_HAND} (先到先停; 现扫 {tc_real}) / "
           f"双手混采(每试次独立 50/50: 4000 试次 {ratio:.1%}; 20 试次窗口两侧都在; 平衡符号已删) / "
           f"无固定单手模式(仅随机抽边, 无单手采集模式)")
 
@@ -1236,7 +1528,7 @@ def selftest():
 
 def smoke(tmp_out=True):
     """GUI 冒烟: 隐藏窗口, 数据写入临时文件 (不污染正式数据)"""
-    import tempfile, os
+    import tempfile, os, io, contextlib
     from types import SimpleNamespace as _NS     # 别用 `types` 这个名字: 冒烟里它被占作击数集合
     global OUT
     real_out = OUT
@@ -1250,7 +1542,7 @@ def smoke(tmp_out=True):
 
         def mk(kb, key):
             """该键**画出来**的标记 (读画布真实状态, 不重写画法规则):
-            '圈' / '叉' / '圈叉' (目标键) · '按' (非目标键按下 = 亮圈) ·
+            '圈' / '叉' / '圈叉' (目标键) · '按' (非目标键按下 = 红圈) ·
             '空' (非目标键骨架圈) · '隐' (半边键盘的另一半)"""
             if not kb.shown(key):
                 return "隐"
@@ -1270,10 +1562,20 @@ def smoke(tmp_out=True):
                 return False
 
         def snapshot(kb):
-            """画布的**全部可见状态** (逐键标记 + 圈/叉线宽 + 画布边框色) —— "首笔 ≡ 后续"断言用"""
-            return ({k: (mk(kb, k), kb.itemcget(kb.circles[k], "width"),
-                         tuple(kb.itemcget(i, "width") for i in kb.crosses[k]))
+            """画布的**全部可见状态** (逐键标记 + 圈/叉当前颜色 + 画布边框色) —— "首笔 ≡ 后续"断言用
+
+            v2.51: 线宽恒定 ⇒ 改为把**颜色**纳入快照 (按下态只改颜色, 快照不覆盖颜色就看不见它)。"""
+            return ({k: (mk(kb, k), kb.itemcget(kb.circles[k], "outline"),
+                         tuple(kb.itemcget(i, "fill") for i in kb.crosses[k]))
                      for k in kb.circles}, kb.cget("highlightbackground"))
+
+        def cap(fn, *a, **kw):
+            """跑 fn 并**抓住 stdout + stderr** (v2.52: 试次号/时间/错误/告警全在控制台,
+            界面提示行已删 ⇒ 断言改读文本; redirect 是运行期换 `sys.stdout`, 与真机同一条路径)"""
+            o, e = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(o), contextlib.redirect_stderr(e):
+                fn(*a, **kw)
+            return o.getvalue(), e.getvalue()
 
         app = ChordSpeedTest(root=root)                 # 默认 = 两击合并单图 (v2.26)
         assert not hasattr(app, "kb1") and not hasattr(app, "kb2"), "默认应为合并单图"
@@ -1285,13 +1587,14 @@ def smoke(tmp_out=True):
             assert not hasattr(app, name), f"{name} 应随 v2.47 删除"
         assert callable(app.on_key_down) and callable(app.on_key_up)
         assert callable(app.on_press) and callable(app.on_release) and callable(app.stop_guards)
-        # 半边键盘 (v2.31): 无基准键标记/无分界线; 只画本试次采集手那一半, 键位保持原位
+        # 半边键盘 (v2.31; **v2.55 曾撤销 → v2.57 恢复**): 只显示本试次采集手那一半,
+        # 另一半整个隐藏 (键少一半才好定位); 无基准键标记/无分界线 (那两类人工记号仍不回来)
         assert not hasattr(app.kb, "marks") and not hasattr(app.kb, "split_line")
         h = 'l' if app.hand == "left" else 'r'
         assert app.kb.hand == h, (app.kb.hand, app.hand)
         hidden = {k for k in app.kb.circles if not app.kb.shown(k)}
         assert hidden == (RIGHT_SET if h == 'l' else LEFT_SET), \
-            (h, sorted(hidden))                      # 另一半整个隐藏 (圈与叉都不可见); 本半 15 键可见
+            (h, sorted(hidden))                      # 另一半整个不可见 (圈与叉都藏); 本半 15 键可见
         # **v2.32 修 (换手试次整图消失)**: 半边隐藏必须可逆 —— 本手的圆全部 state=normal。
         # 旧 _paint 普通键分支不恢复 state, 上一试次采另一手时本手的圆停留在 hidden,
         # 新试次整张图只剩共键可见。这里来回切手验证可逆 + 空键圈不填充 (用户 2026-10-06)
@@ -1314,16 +1617,61 @@ def smoke(tmp_out=True):
         assert app.kb.cget("highlightbackground") == KEY_FRAME
         for m in ("set_active_stroke", "set_active"):
             assert not hasattr(app.kb, m), f"{m} 应随 v2.41 删除"
-        # 窗口不小于内容需求 (硬编码 geometry 会随布局改动过期 → 标签被裁)。
+        # 窗口尺寸 (v2.56): **默认 = 屏幕宽的 1/3 × 屏幕高的 1/4** (居中, 不小于内容需求),
+        # 键位图在窗口里等比缩放居中 (取较紧的那一维顶住)。
         # withdraw 下 wm_geometry 是冻结快照 (Tk 不重算布局) → 先 deiconify 让
-        # _fit_geometry 的请求真正生效, 核对完再收回 (smoke 全程保持隐藏)
+        # _fit_geometry 的请求真正生效, 核对完再收回 (smoke 全程保持隐藏)。
+        # ⚠ 必须 `update()` (不是只 update_idletasks): `<Configure>` 走事件队列, 键位图要等它才重排。
         root.deiconify()
-        root.update_idletasks()
+        root.update()
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
         gw, gh = (int(v) for v in root.wm_geometry().split("+")[0].split("x"))
         assert (gw, gh) >= (root.winfo_reqwidth(), root.winfo_reqheight()), \
             (gw, gh, root.winfo_reqwidth(), root.winfo_reqheight())
-        assert root.winfo_reqheight() <= root.winfo_screenheight() - 60, \
-            (root.winfo_reqheight(), root.winfo_screenheight())
+        assert gw == max(sw // 3, root.winfo_reqwidth()), (gw, sw)
+        assert gh == max(sh // 4, root.winfo_reqheight()), (gh, sh)
+        assert root.winfo_reqheight() <= sh - 60, (root.winfo_reqheight(), sh)
+        base_r = app.kb.r_key_base
+        # 开销 = 根需求 − 画布需求 (现测; 改布局自动跟) ; 基准 = 画布请求尺寸
+        base_w, base_h = int(app.kb.cget("width")), int(app.kb.cget("height"))
+        border = 2 * int(app.kb.cget("highlightthickness"))
+        ovh_w = root.winfo_reqwidth() - app.kb.winfo_reqwidth()
+        ovh_h = root.winfo_reqheight() - app.kb.winfo_reqheight()
+
+        def geo_ok(kb):
+            """等比 / 内切 / 每笔 = 圈直径 —— 与缩放系数无关的几何不变量 (v2.54 用)"""
+            cc = kb.coords(kb.circles['v'])
+            ln = kb.coords(kb.crosses['v'][0])
+            r = (cc[2] - cc[0]) / 2
+            cx, cy = (cc[0] + cc[2]) / 2, (cc[1] + cc[3]) / 2
+            return (abs(r - kb.r_key) < 1e-9
+                    and abs(math.hypot(ln[2] - ln[0], ln[3] - ln[1]) - 2 * r) < 1e-9
+                    and abs(math.hypot(ln[0] - cx, ln[1] - cy) - r) < 1e-9)
+
+        # ① 键位图等比缩放到窗口内, 且**顶住较紧的那一维** (s = min(按宽, 按高) ⇒ 不会溢出);
+        # ② 几何不变量在缩放后仍逐条成立 (圈仍是圆, 叉仍内切、每笔仍 = 圈直径);
+        # ③ 窗口变小时跟着变小; ④ 未布局 (基准排版) = 设计尺寸锚点
+        s_fit = min((gw - ovh_w - border) / base_w, (gh - ovh_h - border) / base_h)
+        s_def = app.kb.scale
+        assert abs(s_def - s_fit) < 0.02, (s_def, s_fit)
+        assert s_def > 1.0 and geo_ok(app.kb), (s_def, "默认窗口下键位图应比基准大")
+        assert (app.kb.scale * base_w <= gw - ovh_w - border + 1
+                and app.kb.scale * base_h <= gh - ovh_h - border + 1), \
+            (app.kb.scale * base_w, gw - ovh_w - border, app.kb.scale * base_h, gh - ovh_h - border)
+        assert app.kb.r_key > base_r and app.kb.stroke_w >= KEY_W
+        root.geometry("400x200")
+        root.update()
+        assert app.kb.scale < s_def and geo_ok(app.kb), app.kb.scale
+        root.geometry(f"{gw}x{gh}")
+        root.update()
+        assert abs(app.kb.scale - s_def) < 1e-9 and geo_ok(app.kb), app.kb.scale
+        assert app.kb.stroke_w == max(1, round(KEY_W * s_def)), app.kb.stroke_w
+        kb_base = KeyboardCanvas(root)                  # 从不布局 ⇒ 基准排版 (s = 1)
+        # 请求尺寸 = 基准外框 432×138 (`winfo_req*` 会多出 highlightthickness 3px×2 的边框)
+        assert (int(kb_base.cget("width")), int(kb_base.cget("height"))) == (432, 138)
+        assert (kb_base.winfo_reqwidth(), kb_base.winfo_reqheight()) == (438, 144)
+        assert kb_base.scale == 1.0 and kb_base.r_key == R_KEY == base_r
+        assert geo_ok(kb_base)
         root.withdraw()
         # 混采 + 随机单手: 跑 80 个试次, 两类都出现, 组合出自**本试次抽到的那只手**, 且两手都抽到
         types, hands_seen = set(), set()
@@ -1361,8 +1709,8 @@ def smoke(tmp_out=True):
         app.phase = "typing"
         app._paint_targets()
         assert app.kb.targets == set('sfxc')
-        # 图形规则 (v2.40, 2026-10-11 用户决策 —— **形状**区分击序, 颜色统一白色):
-        # 第 1 击 = 圈 / 第 2 击 = 叉 / 共有 = 圈里一个叉; 按下 = 加粗高亮, 松开恢复
+        # 图形规则 (v2.40, 2026-10-11 用户决策 —— **形状**区分击序, 未按下时颜色统一白色):
+        # 第 1 击 = 圈 / 第 2 击 = 叉 / 共有 = 圈里一个叉 (按下反馈 = 颜色, 见下方 v2.51 块)
         app.code_strokes = ['sf', 'sv']                # 左手 s: 两击都要打 → 共有
         app.st = StrokeTrial(app.code_strokes)
         app.phase = "typing"
@@ -1385,8 +1733,9 @@ def smoke(tmp_out=True):
         cc = app.kb.coords(app.kb.circles['v'])
         ln = app.kb.coords(app.kb.crosses['v'][0])
         cx, cy = (cc[0] + cc[2]) / 2, (cc[1] + cc[3]) / 2
-        assert abs(math.hypot(ln[2] - ln[0], ln[3] - ln[1]) - 2 * R_KEY) < 1e-9, (ln, R_KEY)
-        assert abs(math.hypot(ln[0] - cx, ln[1] - cy) - R_KEY) < 1e-9, "叉端点必须落在圈上"
+        rk = app.kb.r_key                    # v2.54: 半径随窗口缩放 ⇒ 按**当前**半径读, 不写死
+        assert abs(math.hypot(ln[2] - ln[0], ln[3] - ln[1]) - 2 * rk) < 1e-9, (ln, rk)
+        assert abs(math.hypot(ln[0] - cx, ln[1] - cy) - rk) < 1e-9, "叉端点必须落在圈上"
         assert abs((ln[0] + ln[2]) / 2 - cx) < 1e-9 and abs((ln[1] + ln[3]) / 2 - cy) < 1e-9
         # 图例已删 (v2.45) ⇒ 这里改为验证 `?` 说明书**真的能展开/收起**且正文渲染出了记法与试次号
         assert app.manual_open is False and not packed(app.manual_frame)
@@ -1397,6 +1746,7 @@ def smoke(tmp_out=True):
         assert "圈" in body and "叉" in body and "Trial" in body and "当量数据.tsv" in body, \
             "说明书正文应含记法、试次号与数据落点: " + body[:80]
         assert "成功数/样本数" not in body, "v2.49 已删顶部计数行 ⇒ 说明书不得再讲它: " + body[:80]
+        assert "命令行" in body, "v2.52 起提示只在控制台 ⇒ 说明书必须讲清楚去哪看: " + body[:80]
         assert "**" not in body and "#" not in body.split("\n")[0], "Markdown 标记应被渲染掉"
         h_open = root.winfo_reqheight()
         app._toggle_manual()                          # 再点 → 收起
@@ -1413,6 +1763,7 @@ def smoke(tmp_out=True):
         app._manual_loaded = False
         app._toggle_manual()                          # 收起, 交回后续用例
         app._cancel_next()
+        app.kb.flash_end(); app._err_flashed = False   # 收干净上一块的闪红/额度 (v2.53)
         # 试次首笔必须与随后 _update_kb 的状态**完全一致** (回归断言, 2026-10-11 实测):
         # 旧版首笔用上一试次遗留的 active_stroke 上色, 几毫秒后才被覆盖 ⇒ 用户看到"闪一下"
         app.code_strokes = ['sf', 'xc']
@@ -1430,30 +1781,35 @@ def smoke(tmp_out=True):
         app._paint_targets(); app._update_kb()        # 画布与 st 必须同步 (换了目标就要重画)
         assert app.kb.cget("highlightbackground") == KEY_FRAME     # 边框恒为中性 (不再提示击次)
         app.st.press('s', 0.0); app._update_kb()
-        assert float(app.kb.itemcget(app.kb.circles['s'], "width")) == KEY_W_PRESS
-        assert all(float(app.kb.itemcget(i, "width")) == KEY_W_PRESS for i in app.kb.crosses['s'])
-        assert app.kb.itemcget(app.kb.circles['s'], "fill") == ""    # 按下也不填充 (只加粗)
+        # ── v2.51 按下反馈 = 颜色 (用户: "全白色易疲劳, 按下变绿、不用变粗; 按错变红") ──
+        # 需求②: 共键 s 在第 1 击按下 ⇒ **只有圈变绿, 叉保持白** (叉属于第 2 击)
+        assert app.kb.itemcget(app.kb.circles['s'], "outline") == KEY_OK
+        assert all(app.kb.itemcget(i, "fill") == KEY_MARK for i in app.kb.crosses['s']), \
+            "共键按第 1 击: 叉必须保持白 (它属于第 2 击)"
+        assert float(app.kb.itemcget(app.kb.circles['s'], "width")) == app.kb.stroke_w  # 不变粗
+        assert app.kb.itemcget(app.kb.circles['s'], "fill") == ""    # 按下也不填充 (只变色)
         assert mk(app.kb, 's') == '圈叉'                              # 图形不随按下变化
         app.st.press('f', 0.03); app._update_kb()
-        assert float(app.kb.itemcget(app.kb.circles['f'], "width")) == KEY_W_PRESS
-        assert app.kb.itemcget(app.kb.circles['f'], "fill") == ""
-        # 击1 释放共键 s (f 还按着): s 立即恢复原线宽 —— **v2.32 主修**: 旧用 downs,
+        assert app.kb.itemcget(app.kb.circles['f'], "outline") == KEY_OK      # 第 1 击独有键 ⇒ 绿圈
+        assert float(app.kb.itemcget(app.kb.circles['f'], "width")) == app.kb.stroke_w
+        # 击1 释放共键 s (f 还按着): s 立即回白 —— **v2.32 主修**: 旧用 downs,
         # 已放开的键残留在按下集, 全放后 si=1 时共键瞬间被点亮 (还没按第二击)
         app.st.release('s', 0.05); app._update_kb()
-        assert float(app.kb.itemcget(app.kb.circles['s'], "width")) == KEY_W
+        assert app.kb.itemcget(app.kb.circles['s'], "outline") == KEY_MARK
         app.st.release('f', 0.06)     # 击1 全放 → si=1
         assert app.st.si == 1
         app._update_kb()
         assert app.kb.cget("highlightbackground") == KEY_FRAME, "击序推进不得改变边框 (v2.41)"
         assert [mk(app.kb, k) for k in ('s', 'f', 'v')] == ['圈叉', '圈', '叉']   # 图形恒定
-        app.st.press('s', 0.08); app._update_kb()                     # 击2 按共键 → 加粗
-        assert float(app.kb.itemcget(app.kb.circles['s'], "width")) == KEY_W_PRESS
-        assert float(app.kb.itemcget(app.kb.crosses['s'][0], "width")) == KEY_W_PRESS
-        app.st.press('v', 0.09); app._update_kb()                     # 击2 按叉键 → 叉笔加粗
-        assert float(app.kb.itemcget(app.kb.crosses['v'][0], "width")) == KEY_W_PRESS
+        app.st.press('s', 0.08); app._update_kb()      # 击2 按共键 ⇒ **只有叉变绿** (需求②)
+        assert app.kb.itemcget(app.kb.circles['s'], "outline") == KEY_MARK, \
+            "共键按第 2 击: 圈必须保持白 (它属于第 1 击)"
+        assert all(app.kb.itemcget(i, "fill") == KEY_OK for i in app.kb.crosses['s'])
+        app.st.press('v', 0.09); app._update_kb()      # 击2 按第 2 击独有键 ⇒ 绿叉
+        assert all(app.kb.itemcget(i, "fill") == KEY_OK for i in app.kb.crosses['v'])
         app.st.release('s', 0.15); app.st.release('v', 0.16)
-        # **非目标键按下也高亮** (v2.40: "键位按下时高亮" 对任何键成立; 与旧版"按错键也亮"一致) ——
-        # 只亮圈、不加叉, `mark_strokes` 仍是空集 (按错键不会被读成"属于第 1 击")。这里按的 q
+        # **按错 = 红** (v2.51: 用户"按错的变红") —— 非目标键只亮圈、**不加叉**,
+        # `mark_strokes` 仍是空集 (按错键不会被读成"属于第 1 击")。这里按的 q
         # 会触发 R1 (非目标键 = 真实错误场景), 但本块只验证显示, 不走落盘路径。
         app.code_strokes = ['sf', 'sv']
         app.st = StrokeTrial(['sf', 'sv'])
@@ -1461,13 +1817,77 @@ def smoke(tmp_out=True):
         app.down.clear()
         app._paint_targets(); app._update_kb()
         assert mk(app.kb, 'q') == '空', "非目标键平时 = 极暗骨架圈"
-        app.st.press('q', 0.20); app._update_kb()
+        app.st.press('q', 0.20)
+        app._err_notify()                             # 出错入口 = 打印 + 闪红 (v2.53)
+        app._update_kb()
         assert mk(app.kb, 'q') == '按' and app.kb.mark_strokes('q') == frozenset()
-        assert app.kb.itemcget(app.kb.circles['q'], "outline") == KEY_MARK
-        assert float(app.kb.itemcget(app.kb.circles['q'], "width")) == KEY_W_PRESS
+        assert app.kb.itemcget(app.kb.circles['q'], "outline") == KEY_BAD, "非目标键按下 = 红圈"
+        # ── v2.53 出错闪红: 出错 ⇒ **画布边框变红** (非文字信号, 只改色不加粗) ──
+        assert app.kb.flashing() and app.kb.cget("highlightbackground") == KEY_BAD, "出错应闪红"
+        assert int(app.kb.cget("highlightthickness")) >= 3   # 闪红不加粗
+        assert app.kb.itemcget(app.kb.circles['s'], "outline") == KEY_MARK   # 只动边框, 不动目标键
+        assert float(app.kb.itemcget(app.kb.circles['q'], "width")) == app.kb.stroke_w  # 红而不粗
         assert all(app.kb.itemcget(i, "state") == "hidden" for i in app.kb.crosses['q'])
         app.st.release('q', 0.22); app._update_kb()
         assert mk(app.kb, 'q') == '空', "松开即恢复骨架圈"
+        # 捕获态里接着按别的键: **打印照旧, 但不再重闪** (每试次只闪一次 ← `_err_flashed`)
+        app.st.press('w', 0.24)
+        app.kb.flash_end()                            # 先手动复原 ⇒ 若还会重闪, 下面就会读到红
+        app._err_notify(); app._update_kb()
+        assert not app.kb.flashing(), "同一试次里不该第二次闪红 (会一直在闪)"
+        assert app.st.err_tag == 'R1@1', app.st.err_tag
+        app.st.release('w', 0.26); app._update_kb()
+        # 按错 = 红 的第二形态: 键虽在目标里, 但**不属于当前这一击** ⇒ 也红
+        # (第 2 击时按第 1 击独有的 f: 状态机判 R1@2, 显示上也该是"按错了")
+        app.code_strokes = ['sf', 'xc']
+        app.st = StrokeTrial(['sf', 'xc'])
+        app.phase = "typing"
+        app.down.clear()
+        app._paint_targets(); app._update_kb()
+        assert app.kb.itemcget(app.kb.circles['s'], "outline") == KEY_MARK   # 未按 ⇒ 白
+        assert all(app.kb.itemcget(i, "fill") == KEY_MARK for i in app.kb.crosses['x'])
+        app.st.press('f', 0.0); app.st.press('s', 0.01)
+        app.st.release('f', 0.02); app.st.release('s', 0.03)     # 第 1 击成形并全放
+        app._update_kb()
+        assert app.st.si == 1 and not app.st.error, (app.st.si, app.st.error)
+        assert all(app.kb.itemcget(i, "fill") == KEY_MARK for i in app.kb.crosses['x'])
+        app.st.press('f', 0.04); app._update_kb()                # 第 2 击按第 1 击的键 ⇒ R1@2
+        assert app.kb.itemcget(app.kb.circles['f'], "outline") == KEY_BAD, \
+            "不属于当前击的键按下 = 红 (即使它在目标里)"
+        assert all(app.kb.itemcget(i, "fill") == KEY_MARK for i in app.kb.crosses['x'])
+        app.st.release('f', 0.05); app._update_kb()
+        # 闪红对"第二种按错"同样生效, 且**新试次复位后能再闪** (生产路径 = new_code)
+        app.st = StrokeTrial(['sf', 'xc']); app.phase = "typing"
+        app.down.clear(); app._paint_targets(); app._update_kb()
+        assert not app.kb.flashing(), "新试次开头不该还在闪 (stop_guards/新试次收掉)"
+        app.new_code()                                # 真生产路径: 换目标 + 复位闪红额度
+        app.hand = "left"                             # ⚠ new_code 随机抽边 ⇒ 比键位前先固定回左手
+        assert app._err_flashed is False, "new_code 必须复位闪红额度"
+        app.st = StrokeTrial(['sf', 'xc']); app.phase = "typing"
+        app.down.clear(); app._paint_targets(); app._update_kb()
+        app.st.press('q', 0.0)                        # 非目标键 ⇒ R1@1
+        app._err_notify()
+        assert app.kb.flashing(), "新试次里的第一次出错必须能再闪"
+        # 定时器路径真跑一遍 (不是只手调 flash_end): 1ms 闪光 ⇒ 事件循环转几圈就该自己复原
+        app._cancel_next()                            # 免得试次间隔 (`ITI_MIN_MS..ITI_MAX_MS`) 的下一试次在下面几圈里插进来
+        app.kb.flash_error(ms=1)
+        assert app.kb.flashing() and app.kb._flash_handle is not None
+        t_end = time.time() + 1.0
+        while app.kb.flashing() and time.time() < t_end:
+            root.update()
+            time.sleep(0.01)
+        assert not app.kb.flashing(), "闪红的自动复原没跑 (v2.53 定时器路径断了)"
+        assert app.kb.cget("highlightbackground") == KEY_FRAME
+        assert 0 < ERR_FLASH_MS <= 1000, ERR_FLASH_MS      # 闪红时长必须在合理区间
+        app.kb.flash_end(); app._err_flashed = False  # 收状态, 交回后续用例
+        # v2.51 防回潮 + 三色齐全: 加粗档常量**必须真的不存在** (按下反馈只走颜色),
+        # 绿/红/白三色互不相同 (否则"绿/红"就分不出来了)
+        import 采集核心 as _core
+        assert not hasattr(_core, "KEY_W_PRESS") and "KEY_W_PRESS" not in globals(), \
+            "KEY_W_PRESS 应随 v2.51 删除 (按下反馈只走颜色, 不再加粗)"
+        assert len({KEY_MARK, KEY_OK, KEY_BAD}) == 3, (KEY_MARK, KEY_OK, KEY_BAD)
+        # v2.54: 叉端点偏移不再写死常量 (随半径现算 r/√2) ⇒ 旧的 `X_D` 必须不存在
+        assert not hasattr(_core, "X_D"), "X_D 应随 v2.54 删除 (偏移 = 当前半径/√2)"
         # 2 击但无共有键: 图例第 2 击仍亮; 第 2 击独有键 = 单叉 (无圈)
         app.code_strokes = ['sf', 'xc']
         app._paint_targets(); app._update_kb()
@@ -1500,7 +1920,8 @@ def smoke(tmp_out=True):
             assert all(1 not in v for v in app.kb.target_strokes.values()), \
                 "1 击试次的目标里混进了第 2 击"
             assert app.kb.cget("highlightbackground") == KEY_FRAME, "边框不得随击次变化 (v2.41)"
-            assert "当前" not in app.label_block.cget("text"), app.label_block.cget("text")
+            assert not hasattr(app, "label_block") and not hasattr(app, "label_info"), \
+                "提示行不得回到界面 (v2.52: 只有键位图 + `?`)"
         app._cancel_next()
         # 错误捕获态 (2026-09-29): R1 出错后继续按键, 全放开才落盘 → actual 含完整错误组合
         app.code_strokes = ['sf', 'xc']
@@ -1510,15 +1931,25 @@ def smoke(tmp_out=True):
         app.st.press('d', 0.08)                                # 错键 → R1@2, 捕获态
         assert app.st.error and app.st.err_tag == 'R1@2' and app.st.capturing
         assert not app.st.done
+        # v2.52 错误提示只在控制台: ① 出错**当场**一行 (捕获态必须告诉用户怎么脱身),
+        # ② 收尾落盘时那一行带 `✗ 规则@击序` 与「实际输入」
+        app.hand = "left"
+        out, err_txt = cap(app._err_console)
+        assert out.startswith(f"✗ [Trial {app._trial_num()}]") and "全部松开即继续" in out, out
+        assert err_txt == "", "用户错误走 stdout (会话日志); stderr 只留给真问题"
         app.st.press('g', 0.10)                                # 捕获: 继续记 (不校验)
         app.st.release('d', 0.12)
         assert not app.st.done                                 # g 仍按着 → 未落盘时机
         app.st.release('g', 0.14)                              # 全放开 → done
         assert app.st.done
-        app._record(ok=False)
+        out, err_txt = cap(app._record, False)
+        assert "✗ R1@2" in out and "实际 sf|dg" in out, out     # 日志行含错误码与实际输入
+        assert f"[Trial {out.split(']')[0].split(' ')[-1]}]" in out, out
+        assert err_txt == "", "用户错误不该走 stderr: " + err_txt
         last = Path(OUT).read_text(encoding="utf-8").strip().split("\n")[-1].split("\t")
         assert last[17] == "1" and last[18] == "R1@2", last[17:19]
         assert last[19] == "sf|dg", last[19]                   # 完整错误键位组合
+        assert f"[Trial {last[20]}]" in out, (out, last[20])    # 日志行 Trial N ≡ 落盘 trial 列
         # 固定单手模式已移除 (v2.23): 没有 hand_var / on_hand_change, 抽边只能走 choose_hand
         assert not hasattr(app, "hand_var") and not hasattr(app, "on_hand_change")
         rng_smoke = random.Random(7)
@@ -1530,28 +1961,31 @@ def smoke(tmp_out=True):
         app.st = StrokeTrial(['sf'])
         app.phase = "typing"
         app._paint_targets()
-        app.on_key_down('s', 0.0); app.on_key_down('f', 0.03)
-        app.on_key_up('s', 0.15); app.on_key_up('f', 0.16)
+        out, _err = cap(lambda: (app.on_key_down('s', 0.0), app.on_key_down('f', 0.03),
+                                 app.on_key_up('s', 0.15), app.on_key_up('f', 0.16)))
         assert app.st.done and app.recorded == n_before + 1, (app.recorded, n_before)
         last = Path(OUT).read_text(encoding="utf-8").strip().split("\n")[-1].split("\t")
         assert last[0] == "sf" and last[17] == "0", last[:20]
-        # 完成提示只显示时间 (2026-10-08 用户决策): 一击 = "xxms" (occ = lu−fd = 0.16s)
-        assert app.label_info.cget("text") == "160ms", app.label_info.cget("text")
+        # 完成时间只在**后台日志行**里 (v2.52): 一击 = `xxms` (occ = lu−fd = 0.16s);
+        # 该行的 Trial N 与落盘行 `trial` 列**同源** ⇒ 日志与数据可逐行对账
+        assert out.count("[Trial ") == 1, out
+        assert f"[Trial {last[20]}]" in out and " sf  ok  160ms" in out, out
         app._cancel_next()                          # 清掉本用例排下的下一试次
-        # 完成提示: 二击 = "S1+S2+S3=wc ms" (三段取整后相加 ⇒ 算式恒自洽)
+        # 完成时间: 二击 = "S1+S2+S3=wc ms" (三段取整后相加 ⇒ 算式恒自洽)
         app.hand = "left"
         app.code_strokes = ['sf', 'xc']
         app.st = StrokeTrial(['sf', 'xc'])
         app.phase = "typing"
         app._paint_targets()
-        app.on_key_down('s', 0.0); app.on_key_down('f', 0.03)
-        app.on_key_up('s', 0.10); app.on_key_up('f', 0.11)      # 击1: S1 = 0.11
-        app.on_key_down('x', 0.20); app.on_key_down('c', 0.23)
-        app.on_key_up('x', 0.30); app.on_key_up('c', 0.31)      # 击2: S2 = 0.09, S3 = 0.11
+        out, _err = cap(lambda: (app.on_key_down('s', 0.0), app.on_key_down('f', 0.03),
+                                 app.on_key_up('s', 0.10), app.on_key_up('f', 0.11),      # 击1: S1 = 0.11
+                                 app.on_key_down('x', 0.20), app.on_key_down('c', 0.23),
+                                 app.on_key_up('x', 0.30), app.on_key_up('c', 0.31)))      # 击2: S2 = 0.09, S3 = 0.11
         assert app.st.done
-        assert app.label_info.cget("text") == "110+90+110=310ms", app.label_info.cget("text")
-        a, b, c = (int(v) for v in app.label_info.cget("text")[:-2].replace("ms", "").split("=")[0].split("+"))
-        assert int(app.label_info.cget("text")[:-2].split("=")[1]) == a + b + c
+        assert " sf|xc  ok  110+90+110=310ms" in out, out
+        expr = out.split("ok  ")[1].split("ms")[0]          # "110+90+110=310"
+        a, b, c = (int(v) for v in expr.split("=")[0].split("+"))
+        assert int(expr.split("=")[1]) == a + b + c, expr    # 算式自洽 (屏幕/日志同一口径)
         app._cancel_next()
         # 非目标手禁用 (v2.35): 目标在左手 → 右手键被忽略 (不进状态机/不产生 R1),
         # 本手键照常; 空格/Escape 不属于任何手不受影响 (跳过逻辑另有断言)
@@ -1604,9 +2038,9 @@ def smoke(tmp_out=True):
         app.phase = "typing"
         app._paint_targets()
         n_err0 = app.err_count
-        app.on_press(key_ev('q'))             # 抛 → 必须被隔离 (不上抛、不静默)
+        _o, err_txt = cap(app.on_press, key_ev('q'))   # 抛 → 必须被隔离 (不上抛、不静默)
         assert app.err_count == n_err0 + 1, app.err_count        # 异常被上报 (不是静默)
-        assert "按键处理" in app.label_warn.cget("text"), app.label_warn.cget("text")
+        assert "按键处理" in err_txt and "内部错误" in err_txt, err_txt   # v2.52: 报在 stderr
         app.on_press(key_ev('x')); app.on_release(key_ev('x'))    # 后续按键照常处理
         assert app.st.done, "异常之后的按键没被继续处理 ⇒ 按键路径断了"
         app.on_key_down = real_down
@@ -1620,11 +2054,12 @@ def smoke(tmp_out=True):
         app.st = StrokeTrial(['sf'])
         app.st.press('s', 0.0); app.st.press('f', 0.03)
         app.st.release('s', 0.15); app.st.release('f', 0.16)
-        app._record(ok=True)                          # 不该抛
+        _o, err_txt = cap(app._record, True)          # 不该抛
         assert app.save_failures == fail0 + 1, app.save_failures
         assert app.recorded == rec0, "落盘失败的试次不能计入已记录/覆盖"
         assert app.total_trials == tot0 + 1, app.total_trials
-        assert "落盘" in app.label_warn.cget("text"), app.label_warn.cget("text")
+        assert "落盘失败" in err_txt, err_txt           # v2.52: 告警在 stderr
+        assert "⚠ 未落盘" in _o, _o                     # 日志行标出这一行没进文件
         OUT = good_out
         app._cancel_next()
         # ③ 下一试次调度隔离: new_code 抛异常 → 不抛穿, phase 不永久停在 blocked
@@ -1651,20 +2086,24 @@ def smoke(tmp_out=True):
         for name in ("label_title", "label_count", "label_hint", "_was_fg", "_stale", "_trial_ts",
                      "STALE_HINT_S"):
             assert not hasattr(app, name) and name not in globals(), f"{name} 应随 v2.43 删除"
+        # v2.52: 三行界面提示整体删除 (试次号/完成时间/错误提示/告警全在控制台) —— 防回潮
+        for name in ("label_info", "label_warn", "label_block"):
+            assert not hasattr(app, name), f"{name} 应随 v2.52 删除 (提示只在控制台)"
         # 未获焦点**不再出提示**, 但仍不得动试次 (看门狗只在前台跑); 真问题 (内部错误) 仍要报
         keep = (app.err_count, app.save_failures)     # 前面几块已注入过真问题, 这里先清零看"空"态
+        app._warn_key = None                          # 去重指针也归零 ⇒ 逼它真算一次
         app.err_count = app.save_failures = 0
-        app._refresh_warn()
-        assert app.label_warn.cget("text") == "", app.label_warn.cget("text")
+        _o, err_txt = cap(app._refresh_warn)
+        assert _o == "" and err_txt == "", (_o, err_txt)      # 计数为空 ⇒ 一个字都不打
+        assert app._refresh_warn() is None, "告警函数不该有返回值 (只负责打控制台)"
         n_stuck = []
         real_stuck, real_fg = app._stuck_guard, globals()["app_is_foreground"]
         app._stuck_guard = lambda: n_stuck.append(1)
         app._running = True
         try:
             globals()["app_is_foreground"] = lambda: False
-            app._focus_guard()
-            assert app.label_warn.cget("text") == "", \
-                f"非前台不得再出提示: {app.label_warn.cget('text')}"
+            _o, err_txt = cap(app._focus_guard)
+            assert err_txt == "", f"非前台不得再出提示: {err_txt}"
             assert n_stuck == [], "非前台时看门狗不得动试次 (用户可能只是去别的窗口看一眼)"
             globals()["app_is_foreground"] = lambda: True
             app._focus_guard()
@@ -1672,14 +2111,16 @@ def smoke(tmp_out=True):
         finally:
             app._stuck_guard, app._running = real_stuck, False
             globals()["app_is_foreground"] = real_fg
-        app.err_count = 1                             # 内部错误仍必须显示
-        app._refresh_warn()
-        assert "内部错误" in app.label_warn.cget("text"), app.label_warn.cget("text")
+        app.err_count = 1                             # 内部错误仍必须报出来
+        _o, err_txt = cap(app._refresh_warn)
+        assert "内部错误" in err_txt, err_txt
+        # 去重: 计数没变时**不得重印** (否则每次出错都把旧信息再刷一遍)
+        app._warn_key = (1, 0)                        # 模拟"刚打过这条"
+        assert cap(app._refresh_warn) == ("", ""), "计数器未变化时不该重复打印告警"
         app.err_count, app.save_failures = keep       # 恢复: 真问题照样报, 且不含已删的两条提醒
-        app._refresh_warn()
-        assert "内部错误" in app.label_warn.cget("text") and "落盘失败" in app.label_warn.cget("text")
-        assert "焦点" not in app.label_warn.cget("text")
-        assert "久未完成" not in app.label_warn.cget("text")
+        _o, err_txt = cap(app._refresh_warn)
+        assert "内部错误" in err_txt and "落盘失败" in err_txt, err_txt
+        assert "焦点" not in err_txt and "久未完成" not in err_txt, err_txt
         app._cancel_next()
         # ⑤ 顶部计数行已随 v2.49 删除 (用户决策: 让采集者专心采集 ⇒ 界面只剩 `Trial N`)
         #    删掉的字段与函数必须**真的不存在** (防它们悄悄回来)
@@ -1711,6 +2152,9 @@ def smoke(tmp_out=True):
         assert app.recorded == rec1 + 1, "错误行超时后应照常落盘"
         last = Path(OUT).read_text(encoding="utf-8").strip().split("\n")[-1].split("\t")
         assert last[17] == "1" and last[18].startswith("R1"), last[17:19]
+        assert app.kb.flashing(), "R1 出错 ⇒ 边框应正红着 (v2.53)"
+        app.kb.flash_end()                            # ⚠ smoke 不跑事件循环 ⇒ 手动收掉 450ms 定时器
+        app._err_flashed = False                      # (生产里这两步由定时器与 new_code 各自完成)
         app._cancel_next()
         # ② 正常试次漏收"松开"事件也不会永久卡住 (20s 后按全放收尾)
         app.down.clear()                                      # 清掉上一块留下的按下集
@@ -1726,29 +2170,35 @@ def smoke(tmp_out=True):
         app._stuck_guard()
         assert app.recorded == rec2 + 1, "漏收松开 → 超时应自动收尾"
         app._cancel_next()
-        # ③ 试次间隔里按键必须**说出来** (快打抢拍 ⇒ 静默丢键会造成"击序错位"错觉)
+        # ③ 试次间隔里按键必须**说出来** (快打抢拍 ⇒ 静默丢键会造成"击序错位"错觉) —— v2.52 进控制台
         app.down.clear()
         app.phase = "blocked"
+        app._gap_notified = False                             # 模拟"刚进入间隔"
         app.code_strokes = ['sf', 'xc']
         app.st = StrokeTrial(['sf', 'xc'])
-        app.on_key_down('s', 0.0)
-        assert "没有被记录" in app.label_info.cget("text"), app.label_info.cget("text")
-        app.on_key_up('s', 0.02)                              # 清掉按下集 (blocked 里也跟踪)
+        out, _err = cap(lambda: (app.on_key_down('s', 0.0), app.on_key_down('f', 0.01)))
+        assert "没有被记录" in out, out
+        assert out.count("没有被记录") == 1, "同一个间隔里只提示一次 (防连打刷屏): " + out
+        app.on_key_up('s', 0.02); app.on_key_up('f', 0.03)     # 清掉按下集 (blocked 里也跟踪)
         app._cancel_next()
-        # ④ v2.41: **不再提示击次** —— 图例恒不加粗、边框恒为中性, 打完第 1 击画面**没有变化**;
-        #    唯一遗留的击次信息 = 试次行只写 Trial N (也不含"第几击"字样)
+        # ④ v2.41/v2.52: **不再提示击次**, 界面**也没有任何试次文字** —— 打完第 1 击画面没有变化;
+        #    试次号只在后台日志行里出现 (与落盘行 `trial` 列同源)
         app.down.clear()
         app.hand = "left"
         app.code_strokes = ['sf', 'xc']
         app.st = StrokeTrial(['sf', 'xc'])
         app.phase = "typing"
         app._paint_targets(); app._update_kb()
-        assert app.label_block.cget("text") == f"Trial {app._trial_num()}", \
-            app.label_block.cget("text")
-        app.on_key_down('s', 0.0); app.on_key_down('f', 0.03)
-        app.on_key_up('s', 0.10); app.on_key_up('f', 0.11)     # 击1 完成 → 当前击 = 2
+        n_here = app._trial_num()
+        assert not hasattr(app, "label_block"), "试次号不得回到界面 (v2.52)"
+        out, _err = cap(lambda: (app.on_key_down('s', 0.0), app.on_key_down('f', 0.03),
+                                 app.on_key_up('s', 0.10), app.on_key_up('f', 0.11)))
+        assert out == "", "第 1 击打完不该有任何输出 (试次号只出现在收尾那一行): " + out
         assert app.kb.cget("highlightbackground") == KEY_FRAME, "边框不得随击次变化"
         assert int(app.kb.cget("highlightthickness")) >= 3
+        out, _err = cap(lambda: (app.on_key_down('x', 0.20), app.on_key_down('c', 0.23),
+                                 app.on_key_up('x', 0.30), app.on_key_up('c', 0.31)))
+        assert f"[Trial {n_here}]" in out, out                # 试次号只在控制台
         app._cancel_next()
         # 练习模式: 单击目标 (同样随机抽边) —— 合并图只有圈 (v2.45: 无图例, 无淡出档)
         app3 = ChordSpeedTest(practice=True, root=root)
@@ -1787,31 +2237,76 @@ def smoke(tmp_out=True):
         app2 = ChordSpeedTest(root=root, merge=False)
         assert app2.merge is False and not hasattr(app2, "kb")
         assert len(app2.kb1.circles) == len(app2.kb2.circles) == 30
-        root.update_idletasks()
+        root.deiconify(); root.update()               # v2.54: 像素堆叠要窗口真成形才有意义
         g1, g2 = app2.kb1.grid_info(), app2.kb2.grid_info()
         assert g1["column"] == g2["column"] == 0 and g2["row"] > g1["row"], (g1, g2)
         assert app2.kb2.winfo_y() >= app2.kb1.winfo_y() + app2.kb1.winfo_height(), \
             (app2.kb1.winfo_y(), app2.kb2.winfo_y(), app2.kb1.winfo_height())
         assert app2.kb1.winfo_x() == app2.kb2.winfo_x()
-        app2.hand = "left"                            # 组合取左手 (半边显示才有键可看)
+        # 两块图行权重相同 ⇒ 拿到差不多大的空间 ⇒ 缩放系数接近 (v2.56: 默认窗口只有屏幕 1/4 高,
+        # --split 每块只分到 ~110px ⇒ s < 1; 两块相差 1px 高度导致 ~1% 的缩放差属正常)
+        assert abs(app2.kb1.scale - app2.kb2.scale) < 0.02 and app2.kb1.scale > 0.3, \
+            (app2.kb1.scale, app2.kb2.scale)
+        root.withdraw()
+        app2.hand = "left"                            # 组合取左手 (试次内容与手别一致)
         app2.code_strokes = ['sf', 'xc']
         app2._paint_targets()
         assert app2.kb1.targets == set('sf') and app2.kb2.targets == set('xc')
         assert all(mk(app2.kb1, k) == '圈' for k in 'sf'), "上块 = 第 1 击 ⇒ 圈"
         assert all(mk(app2.kb2, k) == '叉' for k in 'xc'), "下块 = 第 2 击 ⇒ 叉 (stroke=1)"
-        h2 = 'l' if app2.hand == "left" else 'r'     # --split 两图同样只画采集手那一半
-        assert app2.kb1.hand == h2 and app2.kb2.hand == h2
-        assert not app2.kb1.shown('y' if h2 == 'l' else 'q')
+        # v2.57: --split 两块图同样**半边隐藏** (另一手的键整个藏起来, 与合并图同口径)
+        assert all(not app2.kb1.shown(k) and not app2.kb2.shown(k) for k in RIGHT_SET)
+        assert all(app2.kb1.shown(k) and app2.kb2.shown(k) for k in LEFT_SET)
+        assert mk(app2.kb1, 'y') == '隐' and mk(app2.kb2, 'y') == '隐'   # 右手键不画
         # 1 击试次的 --split: 下块无目标 (空图), 上块仍是圈
         app2.code_strokes = ['sf']
         app2._paint_targets()
         assert app2.kb2.targets == set() and mk(app2.kb1, 's') == '圈'
+        # v2.51 按下色在两块图上各按自己的击序: 第 1 击按下 → 上块 (圈) 绿; 第 2 击按下 → 下块 (叉) 绿
+        app2.code_strokes = ['sf', 'xc']
+        app2.st = StrokeTrial(['sf', 'xc'])
+        app2.phase = "typing"
+        app2._paint_targets()
+        app2.st.press('s', 0.0); app2._update_kb()
+        assert app2.kb1.itemcget(app2.kb1.circles['s'], "outline") == KEY_OK
+        assert app2.kb2.pressed == set(), "另一块图不该有按下态 (按键只属于当前击那块)"
+        app2.st.press('f', 0.02); app2.st.release('s', 0.03); app2.st.release('f', 0.04)
+        app2._update_kb()                                        # 第 1 击成形 → 当前击 = 2
+        app2.st.press('x', 0.05); app2._update_kb()
+        assert all(app2.kb2.itemcget(i, "fill") == KEY_OK for i in app2.kb2.crosses['x'])
+        assert app2.kb1.pressed == set()
+        # v2.53: 出错闪红对 --split 的**两块图都生效** (`_canvases()` 统一取)
+        app2.kb1.flash_end(); app2.kb2.flash_end()
+        app2.hand = "left"
+        app2.code_strokes = ['sf', 'xc']
+        app2.st = StrokeTrial(['sf', 'xc'])
+        app2.phase = "typing"
+        app2.down.clear()
+        app2._paint_targets()
+        app2.st.press('q', 0.0)                       # 非目标键 ⇒ R1
+        app2._err_flashed = False                     # (块内直调 st, 额度不复位就测不出闪)
+        app2._err_notify()
+        assert app2.kb1.flashing() and app2.kb2.flashing(), "两块图都该闪红 (--split)"
+        app2.kb1.flash_end(); app2.kb2.flash_end()
+        app2._cancel_next()
         app.stop_guards(); app2.stop_guards(); app3.stop_guards()
         assert not any(hasattr(a, "hook") for a in (app, app2, app3))   # v2.47: 无钩子可卸
         root.destroy()
         print("GUI 冒烟通过: 键位图(图形区分击序 —— 第 1 击=圈 / 第 2 击=叉(长=圈直径, 端点落在圈上) / "
-              "共有=圈里一个叉; 标记统一白色; 按下=加粗高亮、松开恢复; 非目标键=骨架圈(按下则亮圈); "
-              "半边键盘=只画采集手; 默认两击合并 / --split 两图(下块 stroke=1 画叉); "
+              "共有=圈里一个叉; 未按下=白; **按下反馈=颜色** —— 按下当前该打的键=绿<共键第 1 击只绿圈、"
+              "第 2 击只绿叉>, 按不该打的键<非目标键/另一击独有键>=红, 线宽恒定不再加粗; v2.51) / "
+              "**半边键盘** (v2.57 恢复: 只画采集手那一半, 另一半隐藏<键少才好定位>; 隐藏可逆 · "
+              "--split 两块同口径) / "
+              "默认两击合并 / --split 两图(下块 stroke=1 画叉, 按下色各按自己击序); "
+              "**界面只剩键位图 + 右上 `?`** (v2.52: label_info/label_warn/label_block 确不存在) / "
+              "**窗口默认 = 屏幕 1/3 宽×1/4 高, 键位图等比缩放进窗口并居中** (v2.56: 顶住较紧的一维 / "
+              "窗口变小图跟着变小 / 圈仍是圆 · 叉仍内切 · 每笔=圈直径 · 线宽随缩放 / "
+              "未布局时 = 基准 432×138) / **半边键盘** (v2.57 恢复: 只画采集手那一半, 另一半隐藏"
+              "<键少才好定位> · 隐藏可逆 · --split 两块同口径) / "
+              "出错信号(边框闪红 <ERR_FLASH_MS>, 每试次只闪一次, 定时器自动复原; v2.53) / "
+              "后台日志(每试次一行 `[Trial N] 手 组合 ok 时间`<Trial N ≡ 落盘 trial 列> · 错误行带 "
+              "`✗ 规则@击序`+实际输入 · 出错即时一行'全部松开即继续' · 跳过/间隔按键明示且每间隔只提示一次 · "
+              "告警只走 stderr 且按计数去重; v2.52) / "
               "界面文字只剩试次号 (含 `?` 说明书; v2.45)) / "
               "非目标手禁用(忽略不产生R1) / 1击+2击混采 / 记录列 / "
               "完成提示只显示时间(1击 xxms; 2击 xx+xx+xx=xxms 且算式自洽) / "
@@ -1835,6 +2330,59 @@ def smoke(tmp_out=True):
             Path(OUT).unlink(missing_ok=True)
             OUT = real_out
 
+# ── 一次性数据迁移: code 列归一化到 canonical **槽位序** (小指→食指) ────────────────
+def recanon(path=OUT):
+    """把该 TSV 的 **code 列** 归一化到 canonical 槽位序 (`并击公共.canon`), **幂等**, 带备份。
+
+    动机 (v2.61, 2026-10-13 用户决策「表示键位的字母顺序一致性不足，应统一改成小指→食指方向」):
+    记法口径从『键盘行序』(`wa`) 改为『槽位序』(`aw`) ⇒ 旧行必须一起改, 否则同一文件里两种写法
+    并存 (`canon` 容错能读, 但文件本身不一致)。
+    **只重写 code 列的字母序** —— 时间锚点/error/err_type/actual/trial/session 一个字节不动,
+    组合身份语义不变 (`wa` 与 `aw` 是同一个组合)。写入路径仍在采集器内 (铁律 1: 数据只经本工具写)。
+    → (改动行数, 数据行数)"""
+    path = Path(path)
+    if not path.exists():
+        raise SystemExit(f"数据文件不存在: {path}")
+    # ⚠ newline="" 必需: 通用换行会把 CRLF 折成 LF, 而追加写入用的是平台行尾 (Windows = CRLF)
+    #   ⇒ 不保留原行尾会让文件变成"混行尾" (2026-10-13 首跑踩过)
+    with open(path, encoding="utf-8", newline="") as f:
+        lines = f.readlines()
+    hdr = lines[0].rstrip("\r\n").split("\t")
+    if "code" not in hdr:
+        raise SystemExit(f"表头缺 code 列: {hdr[:5]}")
+    ci = hdr.index("code")
+    out, changed = [lines[0]], 0
+    for line in lines[1:]:
+        raw = line.rstrip("\r\n")
+        if not raw:
+            out.append(line)
+            continue
+        end = line[len(raw):] or "\n"                    # 逐行保留原行尾 (本文件为 CRLF)
+        cells = raw.split("\t")
+        if len(cells) != len(hdr):
+            out.append(line)                             # 半行/损坏行原样保留 (read_tsv 也跳过)
+            continue
+        new = "|".join(canon(p) for p in cells[ci].split("|"))
+        if new != cells[ci]:
+            changed += 1
+            cells[ci] = new
+        out.append("\t".join(cells) + end)
+    bak = path.with_name(path.name + ".pre-recanon.bak")
+    if changed:
+        if bak.exists():
+            raise SystemExit(f"备份已存在, 不覆盖: {bak} (确认无误后可手工删除)")
+        bak.write_bytes(path.read_bytes())
+        print(f"备份 → {bak.name}")
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write("".join(out))
+    # 迁移后自检: code 列逐行已是 canonical (就地复查, 不重读文件)
+    bad = [c for c in (l.rstrip("\r\n").split("\t")[ci] for l in out[1:] if l.strip())
+           if "|".join(canon(p) for p in c.split("|")) != c]
+    assert not bad, f"迁移后仍有非 canonical 行: {bad[:3]}"
+    print(f"recanon {path.name}: 改写 {changed} 行 / 共 {len(out) - 1} 行 (code 列已全部为槽位序)")
+    return changed, len(out) - 1
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     # --hand 已于 v2.23 移除 (采集手不再是可选项): 保留参数只为给出明确报错, 不改变行为
@@ -1852,6 +2400,9 @@ if __name__ == "__main__":
                     help="排障: 不摘除窗口输入法上下文 (回到修复前 —— 中文输入法态下可能收不到按键)")
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--smoke", action="store_true")
+    ap.add_argument("--recanon", nargs="?", const="__main__", metavar="TSV",
+                    help="一次性迁移: 把该 TSV 的 code 列归一化到 canonical 槽位序 "
+                         "(小指→食指; 默认 当量数据.tsv; 自动带 .pre-recanon.bak 备份, 幂等)")
     args = ap.parse_args()
     if args.hand is not None:
         ap.error("--hand 已于 v2.23 移除: 采集手固定为『左右 1:1 随机单手』"
@@ -1863,6 +2414,8 @@ if __name__ == "__main__":
         selftest()
     elif args.smoke:
         smoke()
+    elif args.recanon:
+        recanon(OUT if args.recanon == "__main__" else BASE / args.recanon)
     else:
         ChordSpeedTest(practice=args.practice, merge=not args.split,
                        ime=not args.no_ime).run()

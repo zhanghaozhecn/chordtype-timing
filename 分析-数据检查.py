@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from 并击公共 import BASE, LEFT_SET as LEFT, pct   # 手别/数据目录/分位 = 唯一来源 (勿本地再抄一份)
+from 并击公共 import BASE, LEFT_SET as LEFT, pct, canon   # 手别/数据目录/分位/记法 = 唯一来源
 
 def split_parts(s):
     return ''.join(c for c in s if c in LEFT), ''.join(c for c in s if c not in LEFT)
@@ -36,6 +36,20 @@ def main(path):
     num = lambda v: float(v)
     sessions = sorted({r["session"] for r in rows})
     print(f"试次: {len(rows)}  |  session: {', '.join(sessions)}")
+    # 记法校验 (v2.61, 2026-10-13): code 列的组合串必须是 **canonical 槽位序** (小指→食指) ——
+    #   数据文件与报告/排除表同一记法; 旧口径写法 (键盘行序, 如 `wa`) 读侧 `canon` 仍容错,
+    #   但文件本身必须一致 (迁移入口: `采集-并击当量.py --recanon`)
+    noncanon = defaultdict(int)
+    for r in rows:
+        for part in r["code"].split("|"):
+            if part and canon(part) != part:
+                noncanon[part] += 1
+    if noncanon:
+        eg = ", ".join(f"{k}→{canon(k)}" for k in list(noncanon)[:4])
+        print(f"⚠ 记法: {sum(noncanon.values())} 个 code 段非 canonical 槽位序 (如 {eg}) "
+              f"⇒ 用 `采集-并击当量.py --recanon` 迁移")
+    else:
+        print("记法: code 列全部为 canonical 槽位序 (小指→食指)")
 
     errs = [r for r in rows if r["error"] == "1"]
     print(f"错误: {len(errs)} ({100*len(errs)/len(rows):.1f}%)")

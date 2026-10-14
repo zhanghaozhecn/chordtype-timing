@@ -9,8 +9,33 @@ import math
 import numpy as np
 
 BASE = Path(__file__).parent
-LEFT, RIGHT = 'qwertasdfgzxcvb', 'yuiophjkl;nm,./'
+LEFT, RIGHT = 'qazwsxedcrfvtgb', 'p;/ol.ik,ujmyhn'
 LEFT_SET, RIGHT_SET = set(LEFT), set(RIGHT)
+
+# ── 组合字符串的**唯一 canonical 形式 = 槽位序 (小指→食指)** ────────────────────
+# 2026-10-13 用户决策「表示键位的字母顺序一致性不足，应统一改成小指→食指方向」。
+# 规则: 两键按**槽位列**升序写 (左手列 0→4; 右手槽位 = 9−col ⇒ 小指在前、食指在后), 同列内 上→下。
+#   ⇒ 与 `slot_keys/col_pair/row_pair/cell_name` **同一记法** (槽位序 = 键盘几何与 9×7 分类的唯一记法):
+#     左手 canonical 经 `mirror_combo` 得的右手串**逐位同为槽位序** ⇒ 左右手读法一致、镜像同格。
+# 落地范围: ① 组合空间生成 (`_valid_combos`) ② 一切**读入**的组合串归一化 (`canon`/`combo_of`,
+#   旧数据/手写表容错) ③ 采集器写盘的 code 列 ④ 报告与排除表条目写法。
+# ⚠ 旧口径 (2026-10-13 之前) = **键盘行序** (`w` 在 `a` 前 ⇒ `wa`): 与槽位序相比左手 18/63、
+#   右手 45/63 双键串写法不同; 数据/动作文件已按新口径迁移 (`采集-并击当量.py --recanon`)。
+KEY_ORDER_L = LEFT                            # 左手: 小指→食内 (列 0→4), 每列 上→下
+KEY_ORDER_R = RIGHT                           # 右手: 小指→食内 (列 9→5), 每列 上→下
+
+def canon(c):
+    """组合串 → **canonical 槽位序** (小指→食指) —— 组合串的唯一归一化入口 (读入容错 + 写出)。
+    非本手字符按原序排末尾 (刻意不抛异常: 手写排除表可能有杂字符, 由调用方判定合法性)"""
+    c = c.lower()
+    order = LEFT if set(c) <= LEFT_SET else RIGHT
+    return ''.join(sorted(c, key=lambda ch: order.find(ch) if ch in order else len(order)))
+
+def combo_of(stroke, hand):
+    """code 的**一击段** (可能含双手键/杂字符) → 该手组合的 canonical 形式 (该手无键 → '')"""
+    side = LEFT_SET if hand == 'l' else RIGHT_SET
+    c = ''.join(ch for ch in stroke if ch in side)
+    return canon(c) if c else ''
 
 # ── 键盘几何与组合空间 (口径唯一来源: 采集/分析脚本共用; 约束①② 见 README §4.1) ──
 import itertools
@@ -21,21 +46,21 @@ COL_FINGER_R = {5: 4, 6: 4, 7: 5, 8: 6, 9: 7}   # 右手列→指: 食食中无�
 MAX_ROW_D = 1                                    # 约束②: 跨行 ≤1
 
 def _valid_combos(keys, col_finger):
-    """该手全部合法组合: 15 单键 + 满足约束①②的双键 (canonical 键盘序)"""
+    """该手全部合法组合: 15 单键 + 满足约束①②的双键 (**canonical 槽位序**, 见 `canon`)"""
     out = list(keys)
     for a, b in itertools.combinations(keys, 2):
         (ra, ca), (rb, cb) = KEY_POS[a], KEY_POS[b]
         if col_finger[ca] != col_finger[cb] and abs(ra - rb) <= MAX_ROW_D:
-            out.append(a + b)
+            out.append(canon(a + b))
     return out
 LEFT_COMBOS = _valid_combos(LEFT, COL_FINGER_L)      # 78
 RIGHT_COMBOS = _valid_combos(RIGHT, COL_FINGER_R)    # 78
 
-# 3 键组合 (sdf 左 / jkl 右): 同排三指顺指, 各手**唯一** 3 键组合。
+# 3 键组合 (sdf 左 / lkj 右): 同排三指顺指, 各手**唯一** 3 键组合 (canonical 槽位序 ⇒ 右手写 `lkj`)。
 # 2026-09-30 用户决策: 它**不再是判定的参考锚** —— 采样与 2 键同比例 (采集工具 REF_BOOST 取消),
 #   数据作为副产品存在; 判定改为"同角色、同键数的组合总体中心" (见 role_ref_vals / REF_MODE_DEFAULT)。
 #   保留常量的理由: ① 组合空间自测断言"唯一 3 键"; ② 通用模型留一个 3 键数据点。
-REF_COMBO = {'l': 'sdf', 'r': 'jkl'}
+REF_COMBO = {'l': 'sdf', 'r': 'lkj'}
 LEFT_COMBOS.append(REF_COMBO['l'])
 RIGHT_COMBOS.append(REF_COMBO['r'])                  # → 各 79 (78 + 1 三键)
 
@@ -68,6 +93,13 @@ BLOCK, BAND, REF_LAST, SMOOTH, MIN_BLOCKS = 100, 1.10, 5, 3, 8
 # 就不变（串击实测 1-2 轮收敛）。BAND 降级为**种子带宽**（只作迭代起点; 串击按码长分带
 # {4:1.10, 3:1.10, 2:1.15}, 本项目分类型, 两类暂同带 1.10）。
 NSIG = 3.0                                   # 包络宽度 (平台中心 + 3σ_b; 与串击同值)
+TREND_Z = 3.0                                # **趋势门禁**（2026-10-12 用户决策）: 候选平台内
+                                             # 平滑值的 OLS 斜率必须不显著（|b| ≤ TREND_Z·SE(b)）
+                                             # 才认平台。⚠ 平滑值 = 3 块滚动中位 ⇒ 相邻点相关、
+                                             # SE 偏乐观 ⇒ 从严取 3（r 手平台 z≈2.3 仍通过）
+TREND_MIN_PLAT = 3                           # 门禁后平台至少保留的块数（再少不成平台）
+TREND_FALLBACK = 3                           # 全序列都显著下降时取**末 N 块**作"当前状态"
+                                             # （msg 明示; 旧行为是退回全量池 = 静默混练习史）
 
 # ── 错误成本: 指定常数 (2026-09-24 用户决策, 不再实测; README §4.2) ──────────
 # 值 = 姊妹项目 击键测速 实测「错误修正时间」净成本 782.2ms (n=278 episode,
@@ -80,9 +112,12 @@ NSIG = 3.0                                   # 包络宽度 (平台中心 + 3σ_
 #   ② 每词错误机会 = 2 击 vs 串击 3 段 (机会少 → 偏低)。
 # **方向性**: cost 越大越有利于并击 (错误机会更少) → 取实测锚而非更大的圆整数
 #   (如 1000ms), 避免用常数美化本项目方案。
-# 用法: 错误当量 = ERR_COST_MS × P_err (P_err 由 M1 主采集 error/err_type 列建模)。
-# 兜底: M3 组装层必须对 ERR_COST_MS 做敏感性扫描 (0 / 400 / 782 / 1000 / 2000),
-#   确认方案排名与结论不翻转 —— 这是"指定常数而不实测"的代价与验证方式。
+# ⚠ **已撤除（2026-10-14 用户决策）**: 错误项**不再进当量、也不再进剔除分析** ——
+#   原话"错误时间在并击中难以估计, 且 1 类错误中可能包含真实错误和读图错误。所以错误率模型保留,
+#   但是以后不再将错误率加入当量, 也不再用错误率加入剔除分析。"
+#   ⇒ `组装当量表.py` 的 `--cost` / `含错误` 产物 / P_err 读取、以及本常数在生产路径上的**全部用法**
+#   已删除（`cost_ms` 恒 0）; 常量与上面的推导留档**只为复现历史读数**（末次含错误产物
+#   cost 782.2 @2026-10-13 10:46, 已删文件）。错误率模型（`分析-错误率.py`）保留为独立参考。
 ERR_COST_MS = 782.2
 
 # 拼读并击在用组合 (说明书 251223 原始写法 → canonical 化), ●标记用
@@ -92,9 +127,9 @@ SCHEME_LEFT_RAW = ["zv","d","e","sd","w","sg","eg","xg","c","qf","t","f","xc","c
 SCHEME_RIGHT_RAW = [";","U","L","J","N","UL","MK","IO","K","P","M","H","HO","HL","HI","J;","UK","M;",
     "J,",".","UI","/","M,","O","JP","HK",",.","JI","JO","UO","I","Y","H;","JK","J.","U;","M/",
     "KL","J/","ML","UP","M.","JL",","]
-_canon = lambda c, keys: ''.join(sorted(c.lower(), key=keys.find))
-SCHEME_L = {_canon(c, LEFT) for c in SCHEME_LEFT_RAW}
-SCHEME_R = {_canon(c, RIGHT) for c in SCHEME_RIGHT_RAW}
+_canon = canon                                # 别名保留 (2026-10-13 起统一走 `canon` 一条口径)
+SCHEME_L = {canon(c) for c in SCHEME_LEFT_RAW}
+SCHEME_R = {canon(c) for c in SCHEME_RIGHT_RAW}
 
 def scheme_used(combo):
     """该组合是否被拼读并击方案使用 (剔除时的冲突提示)"""
@@ -131,13 +166,11 @@ def hand_segments(r, hand):
     """单模式行的该手三段量 → dict; 该手缺任一击则 {}
       S1/S2/S3 = 三段 (词首占用/换手间隙/词尾占用), wc = S1+S2+S3 (词占用)
       spread1/spread3 = 两击成形散布 (ld−fd, 组合难度)
-      combo1/combo2 = 两击组合串"""
+      combo1/combo2 = 两击组合串 (**canonical 槽位序**, 经 `combo_of` 归一化 ⇒ 旧写的行也读得对)"""
     parts = r["code"].split("|")
     if len(parts) < 2:
         return {}
-    side = LEFT_SET if hand == 'l' else RIGHT_SET
-    c1 = ''.join(c for c in parts[0] if c in side)
-    c2 = ''.join(c for c in parts[1] if c in side)
+    c1, c2 = combo_of(parts[0], hand), combo_of(parts[1], hand)
     if not c1 or not c2:
         return {}
     fd1, ld1, _, lu1 = anchors(r, 1, hand)
@@ -227,6 +260,44 @@ def word_occ(r, hand):
     """该手词占用 wc = lu2 − fd1 (稳定期边界指标); 无效 → None"""
     return hand_segments(r, hand).get("wc")
 
+def _block_med_sm(vals, block, smooth):
+    """块中位 + smooth 滚动中位 —— **边界判据的唯一平滑口径**（包络/趋势门禁/诊断同走此处）"""
+    nb = -(-len(vals) // block)
+    med = np.array([np.median(vals[b*block:(b+1)*block]) for b in range(nb)])
+    sm = np.array([np.median(med[max(0, i-smooth+1):i+1]) for i in range(nb)])
+    return med, sm
+
+def _plat_stats(sm, k, nsig=NSIG):
+    """平台 sm[k:] 的包络统计 → (中心 c, σ_b, 上沿 edge); 平台为空 → (None, None, None)"""
+    plat = np.asarray(sm[k:], float)
+    if not len(plat):
+        return None, None, None
+    c = float(np.median(plat))
+    sig = float(1.4826 * np.median(np.abs(plat - c)))
+    if sig <= 0:                                     # 平台全等值 (理论罕见): 退回 SD
+        sig = float(np.std(plat, ddof=1)) or 1.0
+    return c, sig, c + nsig * sig
+
+def trend_z(sm, k):
+    """平台 sm[k:] 内平滑值的 **OLS 斜率 / SE(slope)** → z（块数<3 → None; 完美拟合 → ±inf）
+    趋势门禁判据: |z| ≤ TREND_Z 才认平台（"平台内没有系统性下降"）"""
+    y = np.asarray(sm[k:], float)
+    m = len(y)
+    if m < 3:
+        return None
+    x = np.arange(m, dtype=float)
+    xm, ym = x.mean(), y.mean()
+    sxx = float(((x - xm) ** 2).sum())
+    if sxx <= 0:
+        return None
+    b = float(((x - xm) * (y - ym)).sum() / sxx)
+    res = y - (ym + b * (x - xm))
+    s2 = float((res ** 2).sum()) / (m - 2)
+    if s2 <= 0:
+        return 0.0 if abs(b) < 1e-9 else float("inf")
+    se = math.sqrt(s2 / sxx)
+    return b / se if se > 0 else float("inf")
+
 def _band_boundary(vals, block, band, ref_last, smooth):
     """旧相对带边界 (现只作包络的**种子**): → (k, R, nb)。
     k=None: 块数<2 (数据不足); k==nb: 末块即超带 (退化)。"""
@@ -249,8 +320,15 @@ def _block_boundary_envelope(vals, block, seed_band, ref_last, smooth, nsig=NSIG
       c = median(平台平滑值), σ_b = 1.4826·MAD(平台平滑值), 上沿 = c + nsig·σ_b,
       新边界 = 自末向前最早连续 ≤ 上沿 的块, 至不动点（实测 1-2 轮收敛）。
     σ_b 必须在**平滑值**上测（原始块中位的 MAD 被平台自身散布抬高, 会把练习段放进来）。
+    **收敛规则（2026-10-12 用户决策）**: 迭代可能出现**振荡**（l 手 2 击实测在块 6/7 间来回,
+    旧实现按 `max_iter` 奇偶停在振荡两端之一 ⇒ 界在"块 1 / 块 8"之间跳）⇒ 一旦发现重复访问的 k,
+    取轨迹里**较晚**的一端并停; 且返回的 (c, sig, edge) **保证与返回的 k 对应**（旧实现可能
+    返回上一轮 k 的统计量 —— 报数会自相矛盾）。
     返回 (k, R, nb, c, sig, edge); nb<2 → (None,None,nb,None,None,None);
-    数据不足/末块超带时退化沿用种子结果 (c/sig/edge = None)。"""
+    数据不足/末块超带时退化沿用种子结果 (c/sig/edge = None)。
+    ⚠ **末块超出包络上沿**是一条独立退化路径（2026-10-13 实测: 平台 σ_b 极平 ⇒ 上沿紧, 而最新块
+    在它之上 ⇒ 迭代把 k 推到末块）: 返回 (nb, R, nb, None, None, None) = "界不可定", 由调用侧
+    按既有退化档处理（`stable_by_type` ⇒ 按主类边界同截）。"""
     nb = -(-len(vals) // block)
     if nb < 2:
         return None, None, nb, None, None, None
@@ -260,20 +338,23 @@ def _block_boundary_envelope(vals, block, seed_band, ref_last, smooth, nsig=NSIG
     k0, _, _ = _band_boundary(vals, block, seed_band, ref_last, smooth)
     if k0 is None or k0 >= nb:                       # 退化 (数据不足/末块超带)
         return k0, R, nb, None, None, None
-    k = k0
-    c = sig = edge = None
-    for _ in range(max_iter):
-        plat = sm[k:]
-        c = float(np.median(plat))
-        sig = float(1.4826 * np.median(np.abs(plat - c)))
-        if sig <= 0:                                 # 平台全等值 (理论罕见): 退回 SD
-            sig = float(np.std(plat, ddof=1)) or 1.0
-        edge = c + nsig * sig
+    k, seen = k0, [k0]
+    while True:
+        if k >= nb:                                  # **末块超出包络上沿** (2026-10-13 修):
+            return k, R, nb, None, None, None        #   平台 σ_b 极平 ⇒ 上沿很紧, 但最新块在它之上
+        c, sig, edge = _plat_stats(sm, k, nsig)      #   ⇒ 迭代把 k 推到末块。旧实现在此处拿空平台的
+        if edge is None:                             #   `edge=None` 去比较 ⇒ TypeError 崩溃。
+            return None, R, nb, None, None, None     #   语义 = 与种子退化同一档 ("末块即超带" ⇒ 无边界)。
         kn = nb
         while kn - 1 >= 0 and sm[kn-1] <= edge:
             kn -= 1
-        if kn == k:
+        if kn == k:                                  # 不动点
             break
+        if kn in seen or len(seen) >= max_iter:      # **振荡/未收敛**（2026-10-12 修）:
+            k = max(seen + [kn])                     #   取较晚（更纯）的一端, 不再由迭代奇偶决定
+            c, sig, edge = _plat_stats(sm, k, nsig)
+            break
+        seen.append(kn)
         k = kn
     return k, R, nb, c, sig, edge
 
@@ -291,19 +372,65 @@ def stable_start(vals, block=BLOCK, band=BAND, ref_last=REF_LAST, smooth=SMOOTH,
         return None, f"块数 {nb} < 2 (数据不足 {len(vals)})"
     if k >= nb:
         return None, f"末块即超带 (退化): 块数 {nb}, 参考 R={R:.0f}ms"
+    med, sm = _block_med_sm(vals, block, smooth)
+    # **趋势门禁（2026-10-12 用户决策）**: 平台内平滑值斜率必须不显著。动机 = l 手 2 击系列是
+    # **渐进斜坡**（不是台阶）, 包络迭代落进振荡区 ⇒ 界由迭代奇偶决定; 只靠包络不足以定界。
+    # 后移到极限（保不住 TREND_MIN_PLAT 块）仍显著 ⇒ 取末 TREND_FALLBACK 块作"当前状态"并明示,
+    # **不再静默退回全量池**（那等于把练习史平均当当前状态）。
+    z = trend_z(sm, k)
+    gate = 0
+    while z is not None and abs(z) > TREND_Z and nb - k > TREND_MIN_PLAT:
+        k += 1
+        gate += 1
+        c, sig, edge = _plat_stats(sm, k)
+        z = trend_z(sm, k)
+    unconverged = z is not None and abs(z) > TREND_Z
+    if unconverged:
+        k = max(0, nb - TREND_FALLBACK)
+        c, sig, edge = _plat_stats(sm, k)
+        z = trend_z(sm, k)
     start = k * block
-    med = np.array([np.median(vals[b*block:(b+1)*block]) for b in range(nb)])
     slope = float(np.polyfit(np.arange(nb), med, 1)[0])
     drift = (med[0] - R) / R * 100 if R else 0.0
     tail = (f"σ_b={sig:.1f} 平台中心={c:.0f} 上沿={edge:.0f}ms (包络, 种子带 {band:.2f})"
             if sig is not None else f"种子带 {band:.2f} (退化, 无包络)")
+    trend = (f" | 趋势门禁 z={z:+.1f}" if z is not None else " | 趋势门禁 不可判(平台<3块)")
+    if gate:
+        trend += f" (后移 {gate} 块)"
+    if unconverged:
+        trend += f" ⚠ 平台仍显著下降 ⇒ 取末 {TREND_FALLBACK} 块作当前状态 (未达平台)"
     return start, (f"块数 {nb} ({block}/块) | 稳定期起始行 {start} (块 {k+1}) | "
                    f"稳定期样本 {len(vals)-start} | 首块中位 {med[0]:.0f} → R {R:.0f}ms "
-                   f"(漂移 {drift:+.0f}%) | 斜率 {slope:+.1f}ms/块 | {tail}")
+                   f"(漂移 {drift:+.0f}%) | 斜率 {slope:+.1f}ms/块 | {tail}{trend}")
 
 def pct(v, q):
     v = sorted(v)
     return v[min(len(v) - 1, int(q * len(v)))]
+
+# ═══════════════ 报数口径: nMAE (唯一实现; 口径继承姊妹项目, 2026-10-13 用户「以后报告结果时
+#   同时报告 nMAE」) ═══════════════════════════════════════════════════════════════
+# 定义 = 姊妹项目 2026-10-10 用户指令「以后结果同时报 MAE、mean、nMAE」: **nMAE = MAE / mean(实测)**,
+#   **同集同分母**（分母就是算 MAE 的那一批样本自己的实测均值, 不是全局常数）。
+# ⚠ **nMAE 有反向偏差, 不可用来判"模型有没有变好"**: 实测误差含明显固定底（误差远非比例型,
+#   见姊妹项目 README §5.1）⇒ **水平变快时 nMAE 会机械上升**。它只回答"误差占该单元平均耗时的比例"。
+# 凡报 MAE 处**同时给 mean 与 nMAE**（差异量如 ΔMAE 除外 —— 那是同一单元内的配对差分, 无量纲分母）。
+def nmae(y_true, y_pred):
+    """nMAE = MAE / mean(实测)（**同集同分母**, 返回比例 ⇒ ×100 得 %; 空集 → nan）"""
+    y = np.asarray(y_true, float)
+    p = np.asarray(y_pred, float)
+    if len(y) == 0:
+        return float("nan")
+    m = float(y.mean())
+    return float(np.abs(y - p).mean() / m) if m else float("nan")
+
+def err_trio(y_true, y_pred):
+    """报数三件套 (mean, MAE, nMAE) —— **同一批样本、同分母**, 让"同时报"不可能漏（README §4.6）"""
+    y = np.asarray(y_true, float)
+    if len(y) == 0:
+        return dict(mean=float("nan"), mae=float("nan"), nmae=float("nan"))
+    return dict(mean=float(y.mean()),
+                mae=float(np.abs(y - np.asarray(y_pred, float)).mean()),
+                nmae=nmae(y, y_pred))
 
 # ═══════════════ 角色 (段位) 模型: 剔除判据的唯一来源 (README §4.4, 2026-09-24) ═══════════════
 # 口径: 击内 spread/occ 有**共用部分** (组合本身的成形难度) + **段位效应** (孤立/词首/词尾
@@ -311,7 +438,7 @@ def pct(v, q):
 # ⇒ 段位效应在差值里自动抵消**, 再把各角色的 log 比按权重平均 ⇒ 组合效应可用全部角色的样本。
 # 一击数据必须参与 (孤立位置 = 一击词/一级字/简词的真实用法), 重要性 1击:2击 = 1:2。
 # **参考水平** (2026-09-30 用户决策): 默认 = 判定对象总体 (该手 2 键组合) 在该角色的样本中位
-#   (pooled); 旧口径 (参考组合 sdf/jkl) 降为 `--ref sdf` 对照。判定**不再依赖 sdf 的时间**。
+#   (pooled); 旧口径 (参考组合 sdf/lkj) 降为 `--ref sdf` 对照。判定**不再依赖 sdf 的时间**。
 ROLES = ("iso", "S1", "S3")                 # 孤立 (1 击试次) / 词首 / 词尾
 ROLE_GROUP = {"iso": "one", "S1": "two", "S3": "two"}
 IMPORTANCE_ONE_TWO = (1, 2)                 # 1 击组 : 2 击组 的权重比 (用户 2026-09-24 定)
@@ -350,8 +477,7 @@ def iso_segment(r, hand):
     parts = [p for p in (r.get("code", "") or "").split("|") if p]
     if len(parts) != 1:
         return {}
-    side = LEFT_SET if hand == 'l' else RIGHT_SET
-    c = ''.join(ch for ch in parts[0] if ch in side)
+    c = combo_of(parts[0], hand)
     if not c:
         return {}
     fd, ld, _, lu = anchors(r, 1, hand)
@@ -447,8 +573,305 @@ def sigma_within_log(vals_by_cell, min_n=3, min_df=10):
         return None
     return math.sqrt(ss / df)
 
+# ═══════════════ 组合剔除: 名次候选 + 显著性 + 镜像并集 + 上限 (2026-10-12 用户决策) ═══
+# 用户原话 (第一轮): "只要一边确定最慢 (**其参与 一击:二击 = 1:2 的各个组合产生的坏影响**排 61 名之后),
+#   就剔除对称的该键位。**61 名是保险, 故意多采**。**15 个单键和 1 个 3 键固定不剔除**。"
+# 用户原话 (第二轮澄清, **关键**): "**不是 61 名之后就硬剔**, 我的意思是最多只剔除 **28 对**,
+#   要剔除还是要**分析显著性**。"
+# ⇒ 规则 (唯一方法; 判据 A / 三层阶梯 / 软降权 / 支配者 / Et 决胜 / 双手交集 全部撤除):
+#   · **名单** = 该手全部组合 (15 单键 + 63 双键 + 1 三键参考 = 79) 按"坏影响"**升序** (快→慢)。
+#     "坏影响" = 综合 occ 比 θ = 各角色与**同角色参考水平**配对的 log 比, 按 **1击组:2击组 = 1:2**
+#     加权平均 (= `joint_log_ratio` + `role_weights`, 不另立口径)。
+#     用 occ (整击占用 lu−fd) 而非 spread: 实测 σ_resid 0.19 vs 0.87 ⇒ 同样本量下名次才排得动
+#     (spread 排序 = 噪声; spread 保留为"成形难度"诊断量, 不进任何判据)。
+#   · **名次 ≤ ELIM_LINE (52) = 保险保留** (用户第二轮: "61 名是保险, 故意多采"; 第三轮把基准定在
+#     第 60 名; **第四轮 2026-10-13 把基准/保险线调成 `ELIM_LINE` = 第 52 名**) —— 永不剔,
+#     名单短于此则**一个都不动**。**名次 > ELIM_LINE = 候选** (只是候选! 不自动出局)。
+#   · **显著性闸门** (`elim_significant`; 用户第二轮"要剔除还是要分析显著性" + 第三轮
+#     "**只比较 occ 段时间，时间显著大于基准名的排除**"): 候选里只有 **occ 时间显著大于
+#     `ELIM_LINE` 名那个组合** 的才允许出局:
+#         log(θ_c / θ_line) > z · 1.253 σ · √(1/n_eff_c + 1/n_eff_line)
+#         ⟺  θ_c > θ_line · margin_adaptive2(n_eff_c, n_eff_line, σ, z)  [两侧噪声都算]
+#     z = Bonferroni `z_for(候选判定数 × 审阅次数)` (序贯审阅不膨胀错误率); σ = 单元内 σ(log occ)。
+#     ⇒ **名次到线但没显著慢于基准名 ⇒ 保留** (这是"点估计排名"与"确定更慢"的分界)。
+#     ⚠ 比较量 = **occ 综合比 θ** (1击:2击 = 1:2 加权、段位配对抵消) —— 即"这个组合的 occ 时间"，
+#       不掺 spread / gap / 错误项；θ 与 θ_line 同口径 ⇒ 比值就是"比基准名慢多少"。
+#   · **行动上限** (`elim_cap_pairs`, 用户第二轮: "最多只剔除 28 对"): 一次审阅**最多剔 28 个镜像对**
+#     (按"较差手 θ"降序取前 28; 超出部分本轮不动, 报告里列出)。
+#   · **保护** = 15 单键 + 1 三键参考 (`elim_protect`): 固定不剔, 名次再差也不动
+#     (单键 = 一级字/简词必需; 3 键按设计只有一个数据点, 采集器本就拒绝把它写进排除表)。
+#   · **对称** = **任一侧出局 ⇒ 镜像对两侧一起出局** (`elim_mirror`; 方案要求左右手可用组合对称)。
+#     "一边**确定**最慢" 里的"确定" = 该侧通过了上面的显著性闸门。
+#   · **不可排名者** (n_eff < n_min) **不判不动**: 不进名单 (不占候选名额), 也不写进排除表。
+#   · 动作 = 写 组合排除表.txt `[quota]` 段 (**硬剔, 不可逆**); 写表门禁 = `elim_write_gate`
+#     (可排名双键 < 90% ⇒ 拒写, `--force` 越过)。
+# 唯一性: 本项目**只有这一种剔除方法** (没有第二判据; 没有可回滚的软降权层)。
+ELIM_LINE = 52          # 保险线 = **第 52 名**: 名次 ≤ 52 保险保留; 名次 > 52 = 候选 (≠ 出局)
+                        #   既是保险线、又是显著性比较的**基准组合** (第 52 名那个组合)
+                        #   沿革: 2026-10-12 第三轮 = 60; **2026-10-13 用户"将比较对象从第 60 位
+                        #   调整到第 52 位"** ⇒ 52 (基准更靠前 ⇒ 阈值更低 ⇒ 更易判显著)
+ELIM_PROTECT = 16       # 保护组合数 = 15 单键 + 1 三键参考 (见 elim_protect)
+ELIM_MAX_PAIRS = 28     # 行动上限: 一次审阅最多剔 28 个镜像对 (用户 2026-10-12 第二轮)
+
+# ═══════════════ 双键的 9×7 结构 (列形态 × 行对) —— 分类顺序 + 名字 ══════════════════
+# 结构事实 (2026-10-08 用户提议, 实测验证): **63 双键 = 9 列形态 (合法指对) × 7 行对**,
+#   每格恰 1 个组合 (左右手同构); 9 = C(5,2) − 1 (5 个槽位列去掉"食外+食内"同指对);
+#   7 = 3×3 − 2 (跨行 ≤1 约束)。
+# 记法一律 **槽位序** (左 col c ↦ 槽 c; 右 col c ↦ 槽 9−c) ⇒ 左右手语义相同、**镜像同格**。
+# 用途 (2026-10-13 用户"按照 9*7 的分类顺序来写，并备注相对速度"): 剔除报告/排除表的**分类顺序**。
+# ⚠ 语义与 `实验/实验-手形行分解.py` 的 `keys_slot/shape_slot/rows_slot` 一致 (那边是几何实验母本);
+#   本处只做"分类顺序 + 可读名字"这一层, 不引入任何特征/模型口径。
+SLOT_NAME = {0: "小", 1: "无", 2: "中", 3: "食外", 4: "食内"}    # 槽位列 → 手指 / 食指内外
+ROW_NAME = {0: "上", 1: "中", 2: "下"}                           # 行号 → 行名 (ROWS 顺序)
+COL_PAIRS = [(a, b) for a in range(5) for b in range(a + 1, 5) if (a, b) != (3, 4)]   # 9 指对
+ROW_PAIRS = [(a, b) for a in range(3) for b in range(3) if abs(a - b) <= 1]           # 7 行对
+CELLS = [(cp, rp) for cp in COL_PAIRS for rp in ROW_PAIRS]                            # 63 格 (分类顺序)
+
+def slot_keys(combo):
+    """组合 → 按**槽位列**升序的 [(行, 槽位列)] (左右手语义相同 ⇒ 镜像一致)"""
+    h = hand_of(combo)
+    return sorted(((KEY_POS[ch][0], KEY_POS[ch][1] if h == 'l' else 9 - KEY_POS[ch][1])
+                   for ch in combo), key=lambda rc: rc[1])
+
+def col_pair(combo):
+    """双键 → **列形态** (合法指对, 槽位序)"""
+    return tuple(cc for _, cc in slot_keys(combo))
+
+def row_pair(combo):
+    """双键 → **行对** (按槽位列升序取行号; 顺/逆指语义由方向隐含)"""
+    return tuple(r for r, _ in slot_keys(combo))
+
+def cell_name(combo, sep="·"):
+    """组合 → 可读标签 "列形态·行对" (如 `小+无·上→中`; 同行写 `同上/同中/同下`)"""
+    cp, rp = col_pair(combo), row_pair(combo)
+    c = "+".join(SLOT_NAME[x] for x in cp)
+    r = f"同{ROW_NAME[rp[0]]}" if rp[0] == rp[1] else f"{ROW_NAME[rp[0]]}→{ROW_NAME[rp[1]]}"
+    return f"{c}{sep}{r}"
+
+def cell_index(combo):
+    """组合在 **9×7 分类顺序**里的序号 (0..62); 单键/三键 → None"""
+    try:
+        return CELLS.index((col_pair(combo), row_pair(combo)))
+    except ValueError:
+        return None
+
+def cell_sort_key(combo):
+    """分类顺序排序键 (双键按 9×7; 单键/三键排最后) —— 报告与写表统一用它"""
+    i = cell_index(combo)
+    return (0, i, combo) if i is not None else (1, 0, combo)
+
+def cell_of(hand):
+    """该手 63 双键 → {(列形态, 行对): 组合} (每格恰 1 个; 分类视图用)"""
+    combos = LEFT_COMBOS if hand == 'l' else RIGHT_COMBOS
+    return {(col_pair(c), row_pair(c)): c for c in combos if len(c) == 2}
+
+def selftest_layout():
+    """键盘布局自测 (2026-10-13 加, 顺手补的守卫): ROWS = 三行标准布局 + KEY_POS 与之一致 + 30 键 + 键集分半
+
+    ⚠ 动机 (真实事故): 一次"组合串批量改名"(`jkl` → `lkj`) 把 `ROWS[1]` 里的键盘布局串
+    `asdfghjkl;` 一起改了 ⇒ `KEY_POS` 里 j/k/l 的列静默错位 ⇒ **几何/φ 全错却不报错**,
+    只有采集侧一条"某组合应在空间内"的断言偶然兜住。布局串只有这一处, 这条断言让它立刻现形。"""
+    assert ROWS == ['qwertyuiop', 'asdfghjkl;', 'zxcvbnm,./'], ROWS
+    assert len(KEY_POS) == 30, len(KEY_POS)
+    for r, row in enumerate(ROWS):
+        for c, ch in enumerate(row):
+            assert KEY_POS[ch] == (r, c), (ch, KEY_POS[ch], (r, c))
+    assert set(KEY_POS) == LEFT_SET | RIGHT_SET
+    assert [len(r) for r in ROWS] == [10, 10, 10]
+    print("键盘布局自测通过: ROWS 三行标准布局 / KEY_POS 与之一致 / 30 键分半正确")
+
+
+def selftest_cells():
+    """9×7 分类自测: 63 双键 ↔ 9×7 **双射**(每格恰 1 个) / **镜像同格** / 锚点与槽位序一致"""
+    assert len(COL_PAIRS) == 9 and len(ROW_PAIRS) == 7 and len(CELLS) == 63
+    for h in ('l', 'r'):
+        cell = cell_of(h)
+        assert len(cell) == 63 and set(cell) == set(CELLS), f"{h} 手双键未恰好覆盖 9×7"
+    for c in [x for x in LEFT_COMBOS if len(x) == 2]:          # 镜像一致性 (剔除对称的地基)
+        m = mirror_combo(c)
+        assert (col_pair(c), row_pair(c)) == (col_pair(m), row_pair(m)), c
+    assert cell_index("we") == CELLS.index(((1, 2), (0, 0)))    # 无+中 · 同·上
+    assert cell_name("we") == "无+中·同上" and cell_name("qs") == "小+无·上→中"
+    assert cell_name("zs") == "小+无·下→中"                     # 逆指 (方向由行对序隐含)
+    assert cell_index("a") is None and cell_index(REF_COMBO['l']) is None
+    assert cell_sort_key("qs") < cell_sort_key("we")          # 小+无 排在 无+中 之前
+    print("9×7 分类自测通过: 63 双键 ↔ 9 列形态 × 7 行对 (每格恰 1 个) / 镜像同格 / "
+          "锚点与槽位序一致 (we/qs/zs) / 单键与三键排在分类之外")
+
+def elim_protect(hand):
+    """该手**永不剔除**的组合 = 15 单键 + 1 三键参考 (唯一来源)"""
+    combos = LEFT_COMBOS if hand == 'l' else RIGHT_COMBOS
+    return {c for c in combos if len(c) != 2}
+
+assert len(elim_protect('l')) == len(elim_protect('r')) == ELIM_PROTECT, \
+    "组合空间变了 ⇒ ELIM_PROTECT / ELIM_LINE 需复核"
+
+def elim_significant(ranked, sigma, z, ref=None):
+    """**显著性闸门** (用户 2026-10-12 第三轮: "只比较 occ 段时间, **时间显著大于基准名的排除**";
+    基准名 = `ELIM_LINE`, 2026-10-13 用户定为 **第 52 名**)
+      显著 = θ_c > θ_ref · margin_adaptive2(n_eff_c, n_eff_ref, σ, z)
+           ⟺ log(θ_c/θ_ref) > z·1.253σ·√(1/n_eff_c + 1/n_eff_ref)
+      语义 = "**该组合的 occ 时间显著大于第 `line` 名** (被比较的那个组合)"; 阈值默认计入**两侧**噪声
+      (被比组合自己也是估计值, 只按组合侧算会过松 —— 与姊妹项目同一条教训)。
+      `ref = (θ_ref, n_eff_ref)` = 名次恰在保险线上的那个组合 (由 elim_rank 的 order 取);
+      **`n_eff_ref = None` ⇒ 基准取「模型 occ 时间」(2026-10-13 用户「判断条件…改成比 52 名的
+      occ 模型时间显著大」), 视为已知 ⇒ 阈值只含候选侧噪声** (`margin_adaptive`) ——
+      ⚠ 这是**用户显式选择的更宽口径**（阈值中位低 ~3–4%）, 不是"模型更准所以噪声更小":
+      m=3 的收缩对 n≈50–70 的组合只挪 ~4%, 基准的抽样误差基本还在, 只是被当成已知。
+      `ref = None` ⇒ 退回旧口径"与同角色组合总体中心 (θ=1) 比" (**只作对照**, 不是现行判据)。
+      ranked = {组合: (θ, n_eff)}; σ = 单元内 σ(log occ)
+      → (significant: set, thresh: {组合: θ 阈值})"""
+    if ref is None:
+        thr = {c: margin_adaptive(n_eff, sigma, z) for c, (_r, n_eff) in ranked.items()}
+    else:
+        t0, n0 = ref
+        thr = ({c: t0 * margin_adaptive(n_eff, sigma, z)
+                for c, (_r, n_eff) in ranked.items()} if n0 is None else
+               {c: t0 * margin_adaptive2(n_eff, n0, sigma, z)
+                for c, (_r, n_eff) in ranked.items()})
+    return {c for c, (ratio, _n) in ranked.items() if ratio > thr[c]}, thr
+
+def elim_rank(ranked, protected=frozenset(), line=ELIM_LINE, significant=None):
+    """**单手名次 + 显著性判定** → (cut: set, order: [(名次, 组合, θ, n_eff)], info)
+      ranked      = {组合: (θ, n_eff)} **可排名者** (θ = 综合 occ 比, 越小越快越好)
+      protected   = 永不剔除的组合 (elim_protect; 名次再差也不动)
+      significant = 通过显著性闸门的组合 (elim_significant); **None = 不做显著性筛** (对照/诊断用)
+      · 候选 = 名次 > line 且 ∉ protected   (只是候选)
+      · cut  = 候选 ∩ significant           (**出局 = 候选里证据显著的**; 镜像并集在 elim_mirror 做)
+    不可排名者不进 ranked ⇒ 不判不动 (调用方另行报告)"""
+    order = [(i + 1, c, ranked[c][0], ranked[c][1])
+             for i, c in enumerate(sorted(ranked, key=lambda c: (ranked[c][0], c)))]
+    cand = {c for k, c, _t, _n in order if k > line and c not in protected}
+    cut = cand if significant is None else (cand & set(significant))
+    info = {"n_ranked": len(order), "line": line, "cut": sorted(cut),
+            "cand": sorted(cand), "insig": sorted(cand - cut),
+            "keep": [c for k, c, _t, _n in order if k <= line],
+            "boundary": ((order[line - 1][1], order[line][1]) if line < len(order) else None),
+            "protected_beyond": [c for k, c, _t, _n in order if k > line and c in protected],
+            "cut_slots": max(0, len(order) - line)}
+    return cut, order, info
+
+def elim_cap_pairs(pairs, score, max_pairs=ELIM_MAX_PAIRS):
+    """**行动上限** (用户 2026-10-12 第二轮: "最多只剔除 28 对"):
+    按"坏影响" (score, 越大越差) 降序保留前 `max_pairs` 个镜像对
+      pairs = 待剔镜像对 (左手形式); score = {左手形式: 坏影响} (调用方 = 较差手的 θ)
+    → (keep: set, dropped: set) —— dropped = 超上限、本轮不动 (报告里列出)"""
+    if len(pairs) <= max_pairs:
+        return set(pairs), set()
+    rated = sorted(pairs, key=lambda p: (-score.get(p, 0.0), p))
+    return set(rated[:max_pairs]), set(rated[max_pairs:])
+
+def elim_mirror(cut_l, cut_r):
+    """**镜像并集** (用户 2026-10-12: 只要一边确定最慢就剔对称键位)
+    → {左手形式: (左出局?, 右出局?)} (按左手 canonical 槽位序; 只含至少一侧出局的对)"""
+    out = {}
+    for cl, cr in mirror_pairs():
+        a, b = cl in cut_l, cr in cut_r
+        if a or b:
+            out[cl] = (a, b)
+    return out
+
+def selftest_elim():
+    """剔除口径自测 (纯函数; **全部按 ELIM_LINE 参数化** ⇒ 改基准名不必改断言):
+    保险线 / 保护优先 / 名单不足不剔 / **显著性闸门 = 显著大于第 ELIM_LINE 名** / **28 对上限** /
+    镜像并集 / 保护集"""
+    L = ELIM_LINE
+    # 名单: 前 L 名 θ=1.00 (含 16 个保护 —— 保护按名次序取前 ELIM_PROTECT 个), 其余 = 真慢 θ=1.50
+    ranked = {f"c{i:02d}": (1.00, 30.0) for i in range(L)}
+    ranked.update({f"c{i:02d}": (1.50, 30.0) for i in range(L, 79)})
+    prot = {f"c{i:02d}" for i in range(ELIM_PROTECT)}          # 前 16 名当保护 (含单键)
+    assert ELIM_PROTECT < L, "保护名次必须落在保险线内 (否则口径自测的构造不成立)"
+    n_cand = 79 - L
+    cut, order, info = elim_rank(ranked, prot)                 # significant=None = 不做显著性筛
+    assert [k for k, *_ in order] == list(range(1, 80))
+    assert cut == {f"c{i:02d}" for i in range(L, 79)}, sorted(cut)   # 名次 L+1..79
+    assert len(cut) == n_cand == info["cut_slots"] and not (cut & prot)
+    assert info["boundary"] == (f"c{L-1:02d}", f"c{L:02d}") and info["n_ranked"] == 79
+    assert info["protected_beyond"] == [] and info["cand"] == sorted(cut) and not info["insig"]
+    # 保护优先于名次: 保险线之外的保护组合照留 (候选名额相应减少)
+    beyond = {f"c{i:02d}" for i in range(70, 79)}
+    cut2, _, info2 = elim_rank(ranked, beyond)
+    assert len(cut2) == n_cand - len(beyond) and len(info2["protected_beyond"]) == len(beyond)         and not (cut2 & prot)
+    # 名单不足保险线 ⇒ 一个都不剔 (数据不足时切 = 掷硬币)
+    cut3, _, info3 = elim_rank({c: v for c, v in ranked.items() if c < "c10"}, prot)
+    assert cut3 == set() and info3["boundary"] is None and info3["cut_slots"] == 0
+    # 不可排名者不在 ranked ⇒ 不可能被剔 (调用方把 unrankable 单独报告)
+    assert elim_rank({}, prot)[0] == set()
+    # ★ 显著性闸门 = "occ 时间显著大于**第 ELIM_LINE 名**" (参考 = 名次恰在保险线上的组合)
+    ref = (order[L - 1][2], order[L - 1][3])                   # (θ_line, n_eff_line) = (1.00, 30)
+    assert ref == (1.00, 30.0) and order[L - 1][1] == f"c{L-1:02d}", order[L - 1]
+    sig_a, thr_a = elim_significant(ranked, 0.17, 3.46, ref=ref)
+    assert sig_a == {f"c{i:02d}" for i in range(L, 79)}, sorted(sig_a)      # ×1.5 ⇒ 全显著
+    assert abs(thr_a[f"c{L:02d}"] - 1.00 * math.exp(3.46 * 1.253 * 0.17
+                                                    * math.sqrt(1 / 30 + 1 / 30))) < 1e-9
+    cut_a, _, info_a = elim_rank(ranked, prot, significant=sig_a)
+    assert cut_a == sig_a and not info_a["insig"]
+    #   温和慢 (×1.10 < 阈值 1.184) ⇒ 名次到线但**一个都不显著** ⇒ 全保留
+    mild = {f"c{i:02d}": (1.00, 30.0) for i in range(L)}
+    mild.update({f"c{i:02d}": (1.10, 30.0) for i in range(L, 79)})
+    sig_b, _ = elim_significant(mild, 0.17, 3.46, ref=(1.00, 30.0))
+    assert sig_b == set(), sorted(sig_b)
+    cut_b, _, info_b = elim_rank(mild, prot, significant=sig_b)
+    assert cut_b == set() and info_b["insig"] == sorted(f"c{i:02d}" for i in range(L, 79))
+    #   两侧噪声都算: 被比对象样本越多 ⇒ 阈值越低 (同自身样本下更容易显著)
+    s7, thr7 = elim_significant({"x": (1.20, 30.0)}, 0.17, 3.46, ref=(1.10, 30.0))
+    assert s7 == set() and abs(thr7["x"] - 1.10 * math.exp(3.46 * 1.253 * 0.17
+                                                          * math.sqrt(1 / 30 + 1 / 30))) < 1e-9
+    s8, t8 = elim_significant({"x": (1.40, 30.0)}, 0.17, 3.46, ref=(1.10, 10 ** 9))
+    assert s8 == {"x"} and t8["x"] < thr7["x"] < 1.40,         ("被比对象几乎无噪声 (n→∞) ⇒ 阈值更松 (只算自身噪声) ⇒ 同一比值更容易显著", t8)
+    s9, t9 = elim_significant({"x": (1.20, 30.0)}, 0.17, 3.46, ref=None)
+    assert s9 == {"x"} and t9["x"] < 1.20, "旧口径 (vs 同角色总体中心 θ=1) 仍可按需复现 (对照用)"
+    # ★ 行动上限: 30 对 ⇒ 只留 28 (按坏影响降序), 超出部分列为"本轮不动"
+    pr = {f"p{i:02d}" for i in range(30)}
+    sc = {f"p{i:02d}": 1.0 + i / 100 for i in range(30)}
+    keep, drop = elim_cap_pairs(pr, sc)
+    assert len(keep) == ELIM_MAX_PAIRS == 28 and len(drop) == 2         and drop == {"p00", "p01"}, sorted(drop)               # 坏影响最小的两个被留下不剔
+    assert elim_cap_pairs({f"p{i:02d}" for i in range(3)}, sc) == ({"p00", "p01", "p02"}, set())
+    # 镜像并集: 任一侧出局 ⇒ 两侧一起; 都不出局 ⇒ 不动
+    cl, cr = "qg", mirror_combo("qg")
+    assert elim_mirror({cl}, set()) == {cl: (True, False)}
+    assert elim_mirror(set(), {cr}) == {cl: (False, True)}
+    assert elim_mirror({cl}, {cr}) == {cl: (True, True)}
+    assert elim_mirror(set(), set()) == {}
+    # 保护集 = 15 单键 + 1 三键 (名次宇宙之外)
+    assert elim_protect('l') == {c for c in LEFT_COMBOS if len(c) != 2}
+    assert sum(1 for c in elim_protect('l') if len(c) == 1) == SINGLES_PER_HAND
+    assert {mirror_combo(c) for c in elim_protect('l')} == elim_protect('r')
+    print(f"剔除口径自测通过: 保险线 {L} (名次>{L} 只是候选, 共 {n_cand} 个) / 显著性闸门 = "
+          f"occ 时间**显著大于第 {L} 名** (两侧噪声; 名次到线但证据不足 ⇒ 保留) / "
+          f"{ELIM_MAX_PAIRS} 对上限 / 保护优先 / 名单不足不剔 / 不可排名者不判 / 镜像并集 / "
+          f"保护集 = 15 单键 + 1 三键")
+
+# ═══════════════ 已撤除 (2026-10-12): 旧判据 A / 三层阶梯 / 软降权 ═══════════════════
+# ⚠ 撤除的**只有**: 旧配额常数 (QUOTA_MAX_CODES / QUOTA_KEEP_TWO_KEY = 52/37) · SOFT_* (软降权) ·
+#   dominator_band / dominator_count (② 支配者硬剔) · quota_cut (① 配额切分) · margin_adaptive2
+#   (角色特异层阈值) · selftest_quota (旧自测) —— 它们的实现**留在本文件只为** `实验/` 下历史实验
+#   脚本的复现依赖, 不在任何生产路径上。
+# ⚠ 本段里**还混着现行口径的通用件**(物理位置排在历史段之后, 但**是**生产路径的一部分):
+#   `SINGLES_PER_HAND` / `TWO_KEY_PER_HAND` (组合空间计数) · `two_key_combos` · 镜像件
+#   (`MIRROR_KEY` / `mirror_combo` / `pair_id` / `mirror_pairs`) · `z_for` (Bonferroni z) ·
+#   `QUOTA_WRITE_RANK_FRAC` / `elim_write_gate` (写表门禁, 旧名 quota_write_gate 为别名)。
+# **现行口径 = 上方的 ELIM_* 块**。
+# ⚠ v2.59 (2026-10-12 用户"现在只需要一个排除表，合并掉"): `组合降权表.txt` **文件已删除**,
+#   采集器不再读任何权重表 (采样权重 = 纯结构权重); 本段里的 `SOFT_*` / `quota_cut` / `dominator_*` /
+#   `margin_adaptive2` 只剩"历史实验脚本 import 得到"这一条存在理由。
+# 撤除内容与理由:
+#   · **判据 A (难度异常)**: 用 spread + 乘性自适应阈值 (z=3.46) 判"显著慢于同角色同键数中心"。
+#     与名次法回答**两个不同问题** (显著性检验 vs 固定名次排序), 排序量/聚合方式/动作档都不同
+#     ⇒ 两套名单必然不一致 (用户: "太复杂, 只保留硬剔的统一方法")。
+#     ⚠ 现行口径**仍然要显著性** (elim_significant), 但用的是**同一套 θ/n_eff 口径**下的
+#     "显著慢于中心"闸门 + 名次候选, 不再单列一个 spread 判据。
+#   · **三层阶梯 ② 硬剔 / ③ 软降权**: ② 支配者计数 (≥K 个组合显著更优) 与 ③ 软降权 (疑似 ⇒
+#     采样权重 ×0.25, 可回滚) 都撤除 —— 现行只有一种动作 = 硬剔 (降权表只剩手工段)。
+#   · **双手交集 (v2.22)**: 改成**并集** (只要一边确定最慢就动)。
+#   · **Et 平手决胜 (v2.36)**: 割线平手时按错误时间升序重排 —— 随软层一起撤除 (保险线本身即余量)。
+# ⚠⚠ **2026-10-14 用户决策（硬禁令）**: "错误时间在并击中难以估计, 且 1 类错误中可能包含真实错误和
+#   读图错误。所以错误率模型保留, 但是以后**不再将错误率加入当量, 也不再用错误率加入剔除分析**。"
+#   ⇒ **剔除的任何环节都不得引入 P_err / 错误时间**: 现行判据本来就不掺 (θ = occ 综合比);
+#   `quota_cut(et=)` 这条历史平手决胜路径**只许复现历史读数, 不得复活**（它与本禁令直接冲突）;
+#   新增剔除量之前先问"这是不是又让错误率进门了"。同禁令的另一半（当量侧）见 ERR_COST_MS 处。
 # ═══════════════ 选码配额: 78 → ≤52 (2026-10-11 用户决策, 由 60 收紧; 原始决策 2026-09-30) ═══
-# 需求: 单手组合空间 = 79 (78 + 唯一 3 键组合 sdf/jkl); 78 = 15 单键 + 63 双键。
+# 需求: 单手组合空间 = 79 (78 + 唯一 3 键组合 sdf/lkj); 78 = 15 单键 + 63 双键。
 #   方案单手最多 **52** 个码位 (15 单键 + 37 双键) ⇒ 从 63 双键里取 ≤37 用于方案, 淘汰 26。
 #   (这是通用模型的一个**用量**; 模型本身不承担任何具体方案的覆盖需求。
 #    方案兼容性核对 2026-10-11: 拼读并击 左手需双键 36 ≤ 37 (余 1) / 右手 29 ≤ 37 (余 8)。)
@@ -478,7 +901,6 @@ QUOTA_KEEP_TWO_KEY = QUOTA_MAX_CODES - SINGLES_PER_HAND  # 37 = 双键保留数 
 SOFT_WEIGHT_DEFAULT = 0.25      # 疑似出局组合的采样权重倍数 (0 = 关闭软降权层)
 SOFT_N_MIN_DEFAULT = 8          # 软降权的 n_eff 门槛 (硬剔 n_min 默认 20 ⇒ 软层更早生效)
 SOFT_MARGIN_DEFAULT = 5         # 支配者带: 支配者 ≥ K − margin 也算疑似 (次要信号)
-WEIGHT_TXT_NAME = "组合降权表.txt"
 
 # ── 动作表的**写表门禁** (v2.20, 2026-09-30 闭环模拟结论) ──────────────────────────
 # 依据 = 实验/实验-新口径样本量.py (把判据接回采样器的闭环模拟, 48 条链):
@@ -491,11 +913,14 @@ WEIGHT_TXT_NAME = "组合降权表.txt"
 #   ⇒ 门禁判据用"① 可排名的双键比例"(与样本量同向、与采样速率无关, 不写死试次数)。
 QUOTA_WRITE_RANK_FRAC = 0.90    # 可排名 (n_eff ≥ --n-min) 的双键比例达该值才允许写动作表
 
-def quota_write_gate(n_rankable, n_total=TWO_KEY_PER_HAND, frac=QUOTA_WRITE_RANK_FRAC):
-    """动作表写表门禁 → (放行?, 说明)。样本不足阶段写表 = 用掷硬币的结果去改采样预算,
-    而且**改错了补不回来** (见上方注释) ⇒ 宁可不写, 只出名单 (--dry-run 仍可随时看)。"""
+def elim_write_gate(n_rankable, n_total=TWO_KEY_PER_HAND, frac=QUOTA_WRITE_RANK_FRAC):
+    """**写表门禁** (现行口径, 判据 = 可排名双键比例) → (放行?, 说明)。
+    样本不足阶段写表 = 用掷硬币的结果去改采样空间, 而且**剔错了补不回来** (见上方注释) ⇒
+    宁可不写, 只出名单 (`--dry-run` 仍可随时看)。门禁取**最差手**。"""
     need = math.ceil(frac * n_total)
-    return n_rankable >= need, f"① 可排名 {n_rankable}/{n_total} (放行线 ≥{need} = {frac:.0%})"
+    return n_rankable >= need, f"可排名双键 {n_rankable}/{n_total} (放行线 ≥{need} = {frac:.0%})"
+
+quota_write_gate = elim_write_gate   # 旧名 (历史自测脚本引用; 同一实现, 不另立口径)
 
 def dominator_band(dom_counts, keep_two_key=QUOTA_KEEP_TWO_KEY, margin=SOFT_MARGIN_DEFAULT):
     """支配者计数 → **疑似出局**集 (dom ≥ K − margin)。
@@ -514,21 +939,20 @@ def two_key_combos(hand):
 #   同一对组合左手可能进割线、右手不进 ⇒ 名单不镜像, 对称映射被破坏。
 #   镜像的定义 = 键盘**列 9−col** (左右手同指、同行、同列距) —— 这是唯一的几何对偶。
 # 结构事实 (自测断言): 左手 78 组合 ↦ 右手 78 组合是**双射**; 几何(行差)+手指(指位)特征
-#   逐对一致; 三键参考 sdf ↔ jkl。⇒ "镜像对" 是良定义的判定单位。
+#   逐对一致; 三键参考 sdf ↔ lkj。⇒ "镜像对" 是良定义的判定单位。
 _KEY_AT = {KEY_POS[ch]: ch for ch in "".join(ROWS)}
 MIRROR_KEY = {ch: _KEY_AT[(r, 9 - c)] for ch, (r, c) in KEY_POS.items()}
 
 def mirror_combo(c):
-    """该组合的**对侧镜像** (左手→右手 / 右手→左手; 按键盘列 9−col; canonical 化到对侧键序)"""
-    keys = RIGHT if hand_of(c) == 'l' else LEFT
-    return ''.join(sorted((MIRROR_KEY[ch] for ch in c), key=keys.find))
+    """该组合的**对侧镜像** (左手→右手 / 右手→左手; 按键盘列 9−col) ⇒ 输出**同为槽位序** (canonical)"""
+    return canon(''.join(MIRROR_KEY[ch] for ch in c))
 
 def pair_id(c):
     """组合 → 它所属**镜像对**的 id (统一取左手 canonical 形式, 便于跨手汇总)"""
     return c if hand_of(c) == 'l' else mirror_combo(c)
 
 def mirror_pairs():
-    """镜像对表 → [(左手双键, 右手镜像)] (63 对; 顺序 = 左手键盘序) —— 对称映射的判定单位"""
+    """镜像对表 → [(左手双键, 右手镜像)] (63 对; 顺序 = 左手 canonical 槽位序) —— 对称映射的判定单位"""
     return [(c, mirror_combo(c)) for c in two_key_combos('l')]
 
 def z_for(n_tests, alpha=0.05):
@@ -751,3 +1175,46 @@ def selftest_roles():
     assert any(s[4] == 0.5 for s in keep)                        # 低值保留 (单侧语义)
     print("角色模型自测通过: 段位抵消 / 1:2 权重 / n_eff 合成 / 不足角色绕开 / 单键零值 / "
           "自适应阈值 / 段级 MAD 单侧围栏")
+
+
+def selftest_boundary():
+    """稳定期边界口径自测（纯合成, 不依赖真实数据）:
+    ① 平平台 → 界落在台阶之后; ② **渐进斜坡（无平台）** → 趋势门禁 + 末块兜底, **不退成全量池**;
+    ③ 包络返回的 (c, σ, 上沿) 必须与返回的 k 自洽（旧实现可能返回上一轮的统计量）;
+    ④ 振荡序列 → 结果确定（取较晚的一端, 不随迭代次数奇偶跳）"""
+    rs = np.random.RandomState(7)
+    blk = 100
+    # ① 台阶: 前 5 块高 + 后 10 块平
+    v1 = np.concatenate([rs.normal(150, 8, 5 * blk), rs.normal(100, 8, 10 * blk)]).tolist()
+    s1, m1 = stable_start(v1, min_blocks=8)
+    assert s1 is not None and s1 <= 6 * blk, (s1, m1)
+    # ② 渐进斜坡: 全程线性下降 ⇒ 无平台
+    v2 = (np.linspace(160, 100, 15 * blk) + rs.normal(0, 5, 15 * blk)).tolist()
+    s2, m2 = stable_start(v2, min_blocks=8)
+    assert s2 is not None, m2
+    assert s2 >= 12 * blk, f"斜坡序列不应退成全量池: start={s2}\n{m2}"
+    assert "趋势" in m2, m2
+    # ③ 统计自洽
+    k, R, nb, c, sig, edge = _block_boundary_envelope(v2, blk, BAND, REF_LAST, SMOOTH)
+    _med, sm = _block_med_sm(v2, blk, SMOOTH)
+    assert abs(c - float(np.median(sm[k:]))) < 1e-9, (c, k)
+    assert abs(edge - (c + NSIG * sig)) < 1e-9, (edge, c, sig)
+    # ④ 振荡序列: 造一个"平台内含一个大台阶"的序列（会让包络在两点间来回）⇒ 结果仍确定
+    v3 = (np.concatenate([np.full(6 * blk, 130.0), np.full(3 * blk, 100.0),
+                          np.full(4 * blk, 112.0), np.full(2 * blk, 100.0)])
+          + rs.normal(0, 3, 15 * blk)).tolist()
+    a1 = _block_boundary_envelope(v3, blk, BAND, REF_LAST, SMOOTH)[0]
+    a2 = _block_boundary_envelope(v3, blk, BAND, REF_LAST, SMOOTH)[0]
+    assert a1 == a2, (a1, a2)
+    # ⑤ **末块超出包络上沿**（2026-10-13 实测 bug 的合成复现）: 极平平台 + 末尾 2 块抬高,
+    #    但抬高幅度仍在**种子相对带**内 ⇒ 种子边界有效 (k0<nb), 包络迭代却把 k 推到末块。
+    #    旧实现此处拿空平台的 edge=None 去比较 ⇒ TypeError; 现应退化为 "界不可定"。
+    v4 = (np.concatenate([np.full(18 * blk, 100.0), np.full(2 * blk, 109.0)])
+          + rs.normal(0, 0.3, 20 * blk)).tolist()
+    k4, R4, nb4, c4, s4, e4 = _block_boundary_envelope(v4, blk, BAND, REF_LAST, SMOOTH)
+    assert k4 >= nb4 and (c4, s4, e4) == (None, None, None), (k4, nb4, c4, s4, e4)
+    t4, m4 = stable_start(v4, min_blocks=8)
+    assert t4 is None and "退化" in m4, (t4, m4)
+    print("稳定期边界自测通过: 台阶定位 / 斜坡不退全量(趋势门禁) / 包络统计自洽 / 振荡确定 / "
+          "末块超上沿不崩(退化, 界不可定)")
+

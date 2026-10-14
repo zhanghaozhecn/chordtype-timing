@@ -31,31 +31,56 @@
 评估（四宫格 + 结构消融，勿改口径）:
   · 段级: occ / gap 的 MAE、R²（留出段）
   · trial 级: 1 击词 occ、2 击词 wc
+  · **报 MAE 处一律带 mean 与 nMAE**（2026-10-13 用户「以后报告结果时同时报告 nMAE」;
+    nMAE = MAE / mean(实测), **同集同分母**, 唯一实现 `并击公共.nmae`）——
+    ⚠ 只读作"误差占该单元平均耗时的比例", 误差含固定底 ⇒ 水平变快时 nMAE 机械上升, **不判模型好坏**
   · 结构消融（M2 必做）: 三段分解合成 vs 直接用键对表预测 wc
   · 所有指标在**留出试次**上算；打印**划分版本**（稳定期规模/测试集/种子）以便追溯
   · torch 单线程 + manual_seed；模型随数据确定性可复现
 
 用法: python 分析-当量模型.py [--hand l|r] [--model shrunk|embed] [--epochs 200]
                               [--full] [--selftest]
-      --full: 全数据重训并导出 产物/当量表-并击.npz（version 戳；M3 组装层读）
+      --full: 全数据重训并导出 产物/当量表-并击-{l,r}.npz（**按手分文件**; version 戳；M3 组装层读）
 """
 import sys, json, time, argparse, math
 from pathlib import Path
 from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import numpy as np
-from 并击公共 import (BASE, read_tsv, hand_segments, iso_segment,
-                     ROLES, pct, stable_by_type,
-                     mad_filter, LEFT_COMBOS, RIGHT_COMBOS, KEY_POS)
+from 并击公共 import (BASE, read_tsv, hand_segments, iso_segment, combo_of,
+                     ROLES, pct, stable_by_type, stable_rows, hand_of,
+                     mad_filter, LEFT_COMBOS, RIGHT_COMBOS, KEY_POS, mirror_combo,
+                     slot_keys, col_pair, row_pair, nmae)
 
 DATA = BASE / "当量数据.tsv"
-OUT_NPZ = BASE / "产物" / "当量表-并击.npz"
+
+
+def out_npz(hand):
+    """产物路径 —— **按手分文件**（2026-10-13 用户"产物表改成左右手分开"）
+    ⇒ `产物/当量表-并击-l.npz` / `-r.npz`（各自整份 occ+gap 表, meta.hand 标手别）"""
+    return BASE / "产物" / f"当量表-并击-{hand}.npz"
+
+
+OUT_NPZ = out_npz("l")      # 兼容旧引用（= 左手路径）
 TEST_FRAC = 0.20
 SEED = 2024                 # 固定随机流（划分与初始化；勿改，改了数字不可比）
 SHRINK_M = 3.0              # 收缩强度 m: est = (n·键级中位 + m·全局中位)/(n+m)
 N_SEEDS = 3                 # 嵌入模型固定种子数（全体平均，无选优）
 MIN_SEG_PER_KEY = 5         # 段级样本少于此的键只靠收缩（并告警数据不足）
-MODEL_VERSION = 8           # v8: φ 删列维 |Δ列|/Δ列（系数≈0+几何实验 CI 跨 0, 门禁删后中性偏正;
+MODEL_VERSION = 10          # v10: **occ 先验换结构/几何形状**（onehot(组合) → 列形态类别 15 ⊕
+                            #   连续几何 3, 见 `occ_struct_feat`; 2026-10-13 用户「进行改进」）。
+                            #   依据: 组合级留出（= **未见组合行**, 键位重排评估场景）
+                            #   列形态类别 + 连续几何 **两手 24/24 更优 −2.7…−3.2ms**, 而
+                            #   **见过组合行打平**（−0.17/+0.04 ns）⇒ 生产报数看不见, 收益全在
+                            #   "没采到的组合"上; 同日三族对比（README §5.8）给第 5 个独立旁证
+                            #   （XGB(指对+行对+角色) ≈ 线性结构先验, 而 XGB(只身份) ≈ 生产 ⇒
+                            #   增益来自**先验形状**而非学习器）。参数数 94 → 33。
+                            #   v9 冻结路径: `ShrunkModel(occ_prior="combo")`
+                            # v9: φ 增**食指列位 2 维**（两侧序数: 食内 +1 / 食指不参与 0 / 食外 −1;
+                            #   8→10 维; 组合级留出 24 轮**两手+两行集都过** l −0.54 [−0.68,−0.39] /
+                            #   r −0.22 [−0.29,−0.16]; 同日对照否掉二元/三态/转移9格/连续列质心/
+                            #   手指构成/换行交互 ⇒ 必须三档序数; 用户拍板; 依据 memory ④b）;
+                            # v8: φ 删列维 |Δ列|/Δ列（系数≈0+几何实验 CI 跨 0, 门禁删后中性偏正;
                             #   同日否决旋转角绝对值; 10→8 维; 用户拍板）;
                             # v7: φ 删「首末同键」（约定代理惰性, 门禁微正, 用户拍板; 11→10 维;
                             #   同日否决: 键重叠细分3格/同指4维 —— 实验-重叠细分与同指.py）;
@@ -71,8 +96,23 @@ def _centroid(combo):
     return sum(r for r, _ in ps) / len(ps), sum(c for _, c in ps) / len(ps)
 
 def _load_n(combo):
-    """负载 n' (3键计2, 2026-10-03 实证): sdf/jkl 的 gap/occ ≈ 2键"""
+    """负载 n' (3键计2, 2026-10-03 实证): sdf/lkj 的 gap/occ ≈ 2键"""
     return 2.0 if len(combo) == 3 else float(len(combo))
+
+def _slot_cols(combo):
+    """组合各键的**槽位列**（左 col c ↦ 槽 c; 右 col c ↦ 槽 9−c）⇒ 左右手语义相同、镜像一致"""
+    right = hand_of(combo) == "r"
+    return [9 - KEY_POS[ch][1] if right else KEY_POS[ch][1] for ch in combo]
+
+def _idx_pos(combo):
+    """**食指位序数**（v9 新增）: 食内(槽 4) +1 / 食指不参与 0 / 食外(槽 3) −1
+    取值唯一: 合法组合里槽 3 与槽 4 不会同现（同指键区约束）—— `selftest` 逐组合断言"""
+    cols = set(_slot_cols(combo))
+    if 4 in cols:
+        return 1.0
+    if 3 in cols:
+        return -1.0
+    return 0.0
 
 def phi_gap_v5(c1, c2):
     """**冻结的 φ v5**（9 维, MODEL_VERSION 5 的生产口径, 2026-10-03~10-11）:
@@ -113,8 +153,8 @@ def phi_gap_v7(c1, c2):
             float(n1 == 1 and n2 == 1), float(n1 == 1 and n2 == 2),
             float(n1 == 2 and n2 == 1), float(n1 == 2 and n2 == 2), 1.0]
 
-def phi_gap(c1, c2):
-    """手内位移特征 (8 维, **φ v8**, MODEL_VERSION 8, 2026-10-11 用户拍板):
+def phi_gap_v8(c1, c2):
+    """**冻结的 φ v8**（8 维, MODEL_VERSION 8 的生产口径, 2026-10-11）:
     **|Δ行| / Δ行 / 键重叠(二元) / 列数对 4 格 onehot** / 常数 = φ v7 − |Δ列| − Δ列。
     删列维依据: ① 系数 ≈0（l −0.9%/+0.9%, r −2.5%/+1.2%; 实验-gap特征系数表.py）;
     ② 实验-几何变化量与gap关系.py: 控制负载+两侧水平几何后**列向位移无净效应**（CI 全跨 0）;
@@ -123,7 +163,7 @@ def phi_gap(c1, c2):
     **同日已测不采用**: 旋转角绝对值（两侧|rot| 门禁 l +0.03 ns / r −0.20 [−0.40,+0.02] CI 含 0;
     Δrot/Δ|rot| 两手全 ns）—— 与 Part I/J「旋转/行质心 = 内插基」结论一致, 不进口径。
     列数对 4 格 / 键重叠的依据见 phi_gap_v6/v5 注释与 Part I/J。**值围栏的 gap 桶仍按 n1'×n2'**
-    （build_samples 本地计算, 不经本函数）。"""
+    （build_samples 本地计算, 不经本函数）。保留只为复现历史快照与实验对照; 生产已换 φ v9。"""
     (r1, c1x), (r2, c2x) = _centroid(c1), _centroid(c2)
     dr, dc = r2 - r1, c2x - c1x
     same_key = float(bool(set(c1) & set(c2)))
@@ -132,7 +172,66 @@ def phi_gap(c1, c2):
             float(n1 == 1 and n2 == 1), float(n1 == 1 and n2 == 2),
             float(n1 == 2 and n2 == 1), float(n1 == 2 and n2 == 2), 1.0]
 
+def phi_gap(c1, c2):
+    """手内位移 + **食指列位** (10 维, **φ v9**, MODEL_VERSION 9, 2026-10-12 用户拍板):
+    φ v8 的 8 维 + **[食指位(c₁), 食指位(c₂)]**（食内 +1 / 食指不参与 0 / 食外 −1, 槽位序）。
+    几何前提 = 每个**非食指手指只对应一列** ⇒ 组合空间里"手要横向挪"只剩食指在槽位 3/4 之间的
+    选择; 而 v8 删掉的 `Δ列` 是**质心**列差（主要反映"用了哪些手指", 不是手挪没挪）。
+    依据（memory ④b; `实验/实验-指列转移与几何先验.py --part form`, 组合级留出 16/63 × 4 种子 ×
+    6 抽 = 24 轮, 未见组合行 / 见过组合行 分报, 配对 bootstrap）: 本形式**两手两行集都过**
+    —— l **−0.54 [−0.68,−0.39]** / r **−0.22 [−0.29,−0.16]**（见过行 −0.79 / −0.17）。
+    **同日对照（都加在 φ v8 上, 24 轮）**: 三态指示 4 维 −0.45/−0.12（略弱）· 二元"是否用食内列"
+    **只过左手**（r −0.02 不可辨）· 转移 9 格 −0.27/−0.01（维度稀释）· 连续列质心水平量
+    r **+0.14 更差** · 手指构成（含小/无/中）两手更差 · ×|Δ行| 交互零增量
+    ⇒ **必须三档序数, 不能压成二元、不能连续化**。系数 l +0.033/+0.042 · r +0.026/+0.028
+    （两手同号, 每单位 ≈ +3%: **食指待在内列 ⇒ 该侧间隙偏长**）。
+    ⚠ **trial 单元测不出**（−0.29 [−1.10,+0.59] / −0.11 [−0.62,+0.34]）⇒ 收益集中在**未见/稀组合**;
+    ⚠ 与 occ 侧方向**相反**（occ 的连续几何读数是"离小指越远越快" ⇒ 食内偏快, 这里食内偏慢）——
+    两段的几何不可共用一个"难度刻度"。"""
+    return list(phi_gap_v8(c1, c2)) + [_idx_pos(c1), _idx_pos(c2)]
+
 PHI_DIM = len(phi_gap("a", "b"))
+
+
+# ── occ 结构先验的特征（**MODEL_VERSION 10**; 2026-10-13 用户「进行改进」）──
+# 动机（三族对比 + 几何先验实验, 见 README §5.8 / §5.2-61）: 生产 occ 先验 = **onehot(组合)**
+# ⇒ 未见组合（键位重排出的新组合、新方案评估场景）整块哑变量**全 0**, 退化成"全局中位 × 段位因子";
+# 换**结构/几何**形状后, 未见组合仍能从"同列形态 / 同行 / 邻近几何"的组合借力。
+# 实测（组合级留出 = 未见组合行）: 列形态类别 + 连续几何 一条 **两手 24/24 更优 −2.7…−3.2ms**,
+# 而**见过组合行打平**（−0.17/+0.04 ns）⇒ 生产报数看不见, 收益全在"没采到的组合"上兑现。
+# 槽位序口径与 并击公共 的 9×7 分类件同源（`slot_keys` 单一来源）: 左 col c ↦ 槽 c, 右 col c ↦ 槽 9−c。
+OCC_SHAPES = tuple(sorted({tuple(cc for _, cc in slot_keys(c))
+                           for c in LEFT_COMBOS + RIGHT_COMBOS}))   # 15 格 = 单键 5 + 双键 9 + 3键 1
+OCC_SHAPE_I = {v: k for k, v in enumerate(OCC_SHAPES)}
+OCC_PRIOR_KINDS = ("struct", "combo")     # struct = v10 结构/几何（默认）; combo = v9 onehot(组合) 冻结口径
+
+
+def _slot_rows(combo):
+    return tuple(r for r, _ in slot_keys(combo))
+
+
+def occ_rot(combo):
+    """旋转角 = 槽位序 后键行 − 前键行 ∈ {−1, 0, +1}（合法组合不跨两行）"""
+    rs = _slot_rows(combo)
+    return float(rs[-1] - rs[0])
+
+
+def occ_row_centroid(combo):
+    """行质心 = 键行均值（0=上 … 2=下）"""
+    rs = _slot_rows(combo)
+    return sum(rs) / len(rs)
+
+
+def occ_struct_feat(combo, role):
+    """occ 结构先验的输入 = onehot(列形态 15) ⊕ [旋转角, 行质心, |旋转角|] ⊕ onehot(角色)
+    （角色在**末位**，与设计阵 `[1.0] + occ_struct_feat(...)` 配套; 列形态必须留在**类别域**
+    —— 纯连续几何的"见过组合行"显著更差 +0.16/+0.07, 见 README §5.2-61 与 2026-10-12 ③）"""
+    v = [0.0] * (len(OCC_SHAPES) + 3)
+    v[OCC_SHAPE_I[tuple(c for _, c in slot_keys(combo))]] = 1.0
+    o = len(OCC_SHAPES)
+    rot = occ_rot(combo)
+    v[o], v[o + 1], v[o + 2] = rot, occ_row_centroid(combo), abs(rot)
+    return v + [1.0 if r == role else 0.0 for r in ROLES]
 
 
 # ═══════════════════════ 数据准备 ═══════════════════════
@@ -150,16 +249,28 @@ def build_samples(rows, hand, use_stable=True, mad_k=3.0):
     ok = [r for r in rows if r.get("error") == "0"]
     stable_msg = "未启用（数据不足，全量）"
     if use_stable and ok:
+        n0 = len(ok)
         info = stable_by_type(ok, hand)
-        cuts = [v.get("cut_row") or 0 for v in info.values() if isinstance(v, dict)]
-        cut = min(cuts) if cuts else 0
-        stable_msg = f"分类型稳定期起点行 {cut}（剩 {len(ok)-cut}/{len(ok)}）"
-        ok = ok[cut:]
-    side_set = set("qwertasdfgzxcvb" if hand == "l" else "yuiophjkl;nm,./")
+        keep, parts = set(), []
+        for t, v in sorted(info.items()):
+            if not isinstance(v, dict):
+                continue
+            keep.update(v.get("stable") or [])
+            parts.append(f"{t}击 界 {v.get('cut_row') if v.get('cut_row') is not None else '—'}"
+                         f"[{v.get('method')}]")
+        if keep:
+            # **按类型各自截取**（2026-10-12 用户决策）: 旧口径取 min(各类型界) ⇒ 任一类找不到
+            # 平台就把**整手**拖成全量池（实测 l 手 2 击界崩到块 1 时, 1 击与 occ 侧本来干净的
+            # 界一起作废, 段-occ/gap/1击/2击 全线读的是练习史平均）。
+            ok = [r for i, r in enumerate(ok) if i in keep]
+            stable_msg = ("分类型稳定期**各自截取**: " + " · ".join(parts)
+                          + f"（剩 {len(ok)}/{n0}）")
+        else:
+            stable_msg = "未启用（分类型边界均未定: " + " · ".join(parts) + "）"
     segs, rows_data = [], {}
     for i, r in enumerate(ok):
         parts = [p for p in r["code"].split("|") if p]
-        cs = ["".join(c for c in p if c in side_set) for p in parts]
+        cs = [combo_of(p, hand) for p in parts]        # canonical 槽位序 (唯一口径; 旧写法容错)
         if len(parts) == 1:                                   # 1 击行 → 孤立角色
             s = iso_segment(r, hand)
             if not s:
@@ -248,12 +359,17 @@ class ShrunkModel:
     + 段位效应 offset(角色) —— 1 击(iso) 与 2 击(S1/S3) 共享组合基数, onehot ridge 拟合。
     依据 (2026-10-03 实测): iso→S1/S3 段位偏移 +11~18ms 两手同号; 组合内段位差 SD (12-16ms)
     ≈ 单元内噪声 (σ_within 13-15ms) ⇒ 一阶可加; 键级中位对先验的偏离只吸收交互残差。
+    **occ 先验的形状（v10, 2026-10-13 用户「进行改进」）**: `occ_prior="struct"` = 列形态类别 +
+    连续几何（见 `occ_struct_feat`）, 取代 v9 的 onehot(组合) —— 依据是**未见组合行**（键位重排
+    评估场景）−2.7…−3.2ms 而见过组合行打平; `occ_prior="combo"` = v9 冻结口径, 只在复现历史读数时用。
     gap 侧特别关键: 键对空间 79² 极稀（900 试次也几乎无重叠键对）, 纯键对中位等于没有
     → 先对 φ 拟合 ridge 得"几何外推预测", 键对样本再向其收缩（README §5 模型 B 的几何路线）"""
     name = "shrunk"
 
-    def __init__(self, lam=1.0):
-        self.lam = lam
+    def __init__(self, lam=1.0, occ_prior=OCC_PRIOR_KINDS[0]):
+        assert occ_prior in OCC_PRIOR_KINDS, f"occ_prior 只能是 {OCC_PRIOR_KINDS}"
+        self.lam, self.occ_prior = lam, occ_prior
+        self.n_par = 0
 
     def _ridge(self, X, y):
         """岭回归（含截距列）→ w; y 为 log 尺度"""
@@ -280,18 +396,29 @@ class ShrunkModel:
             self.w_gap = self._ridge(X, [math.log(max(v, 1e-3)) for *_, v in gap])
         else:
             self.w_gap = np.array([math.log(self.g_gap)] + [0.0] * PHI_DIM)
-        # occ 可加先验: log(occ) ~ 1 + onehot(组合) + onehot(角色) —— 组合基数跨角色共享;
-        # 稀角色借其它角色的样本, 未见组合退化为 全局中位×段位因子。样本不足时退化为全局中位
+        # occ 可加先验: log(occ) ~ 1 + <先验块> + onehot(角色) —— 组合基数跨角色共享;
+        # 稀角色借其它角色的样本。样本不足时退化为全局中位。
+        # 先验块 = **occ_prior="struct"（v10）列形态类别 ⊕ 连续几何** / "combo"（v9）onehot(组合)。
+        # ⚠ 未见组合: struct 仍能借"同列形态/同行/邻近几何"的组合; combo 整块全 0 ⇒ 退化成
+        #   全局中位×段位因子。`occ_combos` 保留为"训练集见过的组合"（H._npar 等仍读它）。
         self.occ_combos = sorted({c for _, _, c, _ in occ})
-        self.occ_roles = ("iso", "S1", "S3")
+        self.occ_roles = ROLES
+        self.occ_blocks = (len(OCC_SHAPES) + 3 if self.occ_prior == "struct"
+                           else len(self.occ_combos))
+        self.n_par = (1 + self.occ_blocks + len(self.occ_roles)) + (1 + PHI_DIM)
         if len(occ) >= len(self.occ_roles) + 2:
-            X = [[1.0] + [1.0 if c == cc else 0.0 for cc in self.occ_combos]
-                 + [1.0 if r == rr else 0.0 for rr in self.occ_roles]
-                 for _, r, c, _ in occ]
+            X = [[1.0] + self._occ_feat(c, r) for _, r, c, _ in occ]
             self.w_occ = self._ridge(X, [math.log(max(v, 1e-3)) for *_, v in occ])
         else:
             self.w_occ = None
         return self
+
+    def _occ_feat(self, combo, role):
+        """先验块（角色 onehot 在末位, 由本函数一并给出 ⇒ 设计阵 = [1.0] + 本函数）"""
+        if self.occ_prior == "struct":
+            return occ_struct_feat(combo, role)
+        return ([1.0 if combo == c else 0.0 for c in self.occ_combos]
+                + [1.0 if r == role else 0.0 for r in self.occ_roles])
 
     def _shrink(self, vals, prior):
         if not vals:
@@ -303,10 +430,7 @@ class ShrunkModel:
         """可加先验 exp(w·x); w_occ=None (样本不足) → 全局中位"""
         if self.w_occ is None:
             return self.g_occ
-        x = ([1.0]
-             + [1.0 if c == combo else 0.0 for c in self.occ_combos]
-             + [1.0 if r == role else 0.0 for r in self.occ_roles])
-        return math.exp(float(np.dot(self.w_occ, x)))
+        return math.exp(float(np.dot(self.w_occ, [1.0] + self._occ_feat(combo, role))))
 
     def occ(self, combo, role):
         return self._shrink(self.occ_by.get((combo, role), []), self._occ_prior(combo, role))
@@ -426,7 +550,7 @@ def compose_word(mdls, strokes):
     **2 击词 (v2.33 简化, 2026-10-04 用户决策)**: 词当量 = **max_h ( S1_h + gap_h + S3_h )**
     —— "逐段取最大再合成"与"整体取最大"在实测表上**恒等**, 闸门项无需计算。
     依据 (`实验/实验-分段max合成.py`): 闸门阻塞项 G = max_h S1_h + max_h S3_h 恒被本征间隙吸收 ——
-    拼读并击在用组合 (声介 51 左手 × 韵调 44 右手) 全枚举 **550 万词 Δ = max(0, G − max_h chain_h)
+    真实词组合全枚举 **550 万词 Δ = max(0, G − max_h chain_h)
     恒为 0** (二字词 5,035,536 个 0 命中, 最险词余量 48.7ms; 三级字最紧 16.4ms;
     bootstrap 重采样重训 60 轮 0 翻转)。闭式: Δ = max(0, min(S1_A − S1_B − gap_B, S3_B − S3_A − gap_A)),
     A/B = S1/S3 支配手 —— 为正要跨过**另一只手的本征间隙** (跨手段差 ~50-70ms < 间隙 ~63-170ms)。
@@ -454,14 +578,19 @@ def compose_word(mdls, strokes):
 
 
 def metrics(y, p):
+    """单元误差三件套 + 偏差/R²。**mean / MAE / nMAE 同集同分母**（`并击公共.nmae` 唯一实现;
+    2026-10-13 用户「以后报告结果时同时报告 nMAE」⇒ 报 MAE 处一律带 mean 与 nMAE）。
+    ⚠ nMAE 只读作"误差占该单元平均耗时的比例",**不可用来判模型有没有变好**（误差含固定底,
+    水平变快时 nMAE 机械上升 —— 姊妹项目 README §5.1 实测）。"""
     y, p = np.asarray(y, float), np.asarray(p, float)
     if len(y) == 0:
-        return dict(n=0, mae=float("nan"), bias=float("nan"), r2=float("nan"))
+        return dict(n=0, mean=float("nan"), mae=float("nan"), nmae=float("nan"),
+                    bias=float("nan"), r2=float("nan"))
     mae = float(np.abs(y - p).mean())
     bias = float((p - y).mean())
     sst = float(((y - y.mean()) ** 2).sum())
     r2 = 1 - float(((y - p) ** 2).sum()) / sst if sst > 0 else float("nan")
-    return dict(n=len(y), mae=mae, bias=bias, r2=r2)
+    return dict(n=len(y), mean=float(y.mean()), mae=mae, nmae=nmae(y, p), bias=bias, r2=r2)
 
 
 def evaluate(model, tr, te):
@@ -510,31 +639,41 @@ def report(hand, model, split_msg, out, samples):
           f"({TEST_FRAC:.0%}), 种子 {split_msg['seed']} — **trial 级**（段级划分禁用）")
     print(f"留出段数: occ {out['occ_seg']['n']} / gap {out['gap_seg']['n']} / "
           f"1击词 {out['one_trial']['n']} / 2击词 {out['two_trial']['n']}")
-    print(f"\n{'单元':>10} {'n':>5} {'MAE':>7} {'偏差':>7} {'R²':>7}   基线 MAE / 相对改善")
+    print(f"\n{'单元':>10} {'n':>5} {'mean':>7} {'MAE':>7} {'nMAE':>7} {'偏差':>7} {'R²':>7}   "
+          f"基线 MAE / 相对改善")
     for k, bk, label in (("occ_seg", "base_occ", "段-occ"), ("gap_seg", "base_gap", "段-gap"),
                          ("one_trial", "base_one", "试次-1击"), ("two_trial", "base_wc", "试次-2击")):
         m, b = out[k], out[bk]
         gain = (1 - m["mae"] / b["mae"]) * 100 if b["mae"] else float("nan")
-        print(f"{label:>10} {m['n']:>5} {m['mae']:>7.1f} {m['bias']:>+7.1f} {m['r2']:>7.3f}   "
+        print(f"{label:>10} {m['n']:>5} {m['mean']:>7.1f} {m['mae']:>7.1f} "
+              f"{m['nmae']*100:>6.2f}% {m['bias']:>+7.1f} {m['r2']:>7.3f}   "
               f"{b['mae']:>7.1f} / {gain:>+5.1f}%")
+    print("  （nMAE = MAE / mean(实测, 同集同分母); ⚠ 只读作「误差占该单元平均耗时的比例」"
+          "—— 误差含固定底, 水平变快时 nMAE 会机械上升, 别拿它判模型好坏）")
     print(f"\n结构消融（M2 必做; 三段分解是否为净收益）:")
-    print(f"  三段合成 wc  MAE {out['two_trial']['mae']:.1f}  R² {out['two_trial']['r2']:.3f}")
-    print(f"  直接键对 wc  MAE {out['wc_direct']['mae']:.1f}  R² {out['wc_direct']['r2']:.3f}"
+    print(f"  三段合成 wc  mean {out['two_trial']['mean']:.1f}  MAE {out['two_trial']['mae']:.1f}  "
+          f"nMAE {out['two_trial']['nmae']*100:.2f}%  R² {out['two_trial']['r2']:.3f}")
+    print(f"  直接键对 wc  mean {out['wc_direct']['mean']:.1f}  MAE {out['wc_direct']['mae']:.1f}  "
+          f"nMAE {out['wc_direct']['nmae']*100:.2f}%  R² {out['wc_direct']['r2']:.3f}"
           f"  → 分解{'有' if out['two_trial']['mae'] < out['wc_direct']['mae'] else '无'}"
           f"净收益（差 {out['wc_direct']['mae']-out['two_trial']['mae']:+.1f}ms）")
 
 
 # ═══════════════════════ 导出 ═══════════════════════
-def export(model, hand, out_path=OUT_NPZ):
-    """产物: occ 表 (角色×组合) + gap 表 (组合×组合) + 版本戳（M3 组装层读）"""
+def export(model, hand, out_path=None):
+    """产物: occ 表 (角色×组合) + gap 表 (组合×组合) + 版本戳（M3 组装层读）
+    **按手分文件**（out_path=None ⇒ `产物/当量表-并击-{hand}.npz`）"""
+    out_path = Path(out_path) if out_path is not None else out_npz(hand)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     combos = LEFT_COMBOS if hand == "l" else RIGHT_COMBOS
     occ = np.array([[model.occ(c, role) for c in combos] for role in ROLES], dtype=np.float64)
     gap = np.array([[model.gap(a, b) for b in combos] for a in combos], dtype=np.float64)
     meta = {"hand": hand, "model": model.name, "n_combos": len(combos),
             "roles": list(ROLES), "phi_dim": PHI_DIM, "shrink_m": SHRINK_M,
-            "note": "occ = lu−fd (成形占用; v2 可加结构: log occ = base(组合)+offset(角色), "
-                    "iso 与 S1/S3 共享基数); gap = fd₂−lu₁ (本征换手间隙, 闸门只在合成时施加)"}
+            "occ_prior": getattr(model, "occ_prior", None),
+            "note": "occ = lu−fd (成形占用; 可加结构: log occ = base(组合)+offset(角色), "
+                    "iso 与 S1/S3 共享基数; v10 起 base 的形状 = 列形态类别 ⊕ 连续几何 ―― "
+                    "未采到的组合也能外推); gap = fd₂−lu₁ (本征换手间隙, 闸门只在合成时施加)"}
     np.savez(out_path, version=np.int64(MODEL_VERSION), combos=np.array(combos),
              occ=occ, gap=gap, meta=json.dumps(meta, ensure_ascii=False))
     print(f"\n导出 → {out_path} (version {MODEL_VERSION}, {len(combos)} 组合, "
@@ -544,10 +683,16 @@ def export(model, hand, out_path=OUT_NPZ):
 
 # ═══════════════════════ 合成自测 ═══════════════════════
 def _synth_occ_true(c, role):
-    """合成真值: **恰为可加结构** base(组合) + offset(角色) — 检验可加模型能否还原"""
-    base = 80.0 + 18.0 * (len(c) - 1)
-    extra = 6.0 * (sum(ord(x) for x in c) % 7)
-    return base + extra + {"iso": -12.0, "S1": 0.0, "S3": 8.0}[role]
+    """合成真值: **恰为可加结构** base(组合形状) + offset(角色) + 小的组合特异抖动 — 检验可加模型能否还原
+    ⚠ v10 起 occ 先验本身是**结构/几何**形状 ⇒ 真值必须**结构可表**: 旧版"每组合随机 extra"
+    （`6·(ord 和 % 7)`）只有 onehot(组合) 能吃, 换结构先验后不可表, 自测会变成测"先验的容量"而不是
+    "可加性与基数共享"。这里保留一个 **±8ms 的结构外抖动**（= 真值里模型无论如何学不到的部分,
+    用来把"能借结构"与"能背组合"区分开）。"""
+    base = (80.0 + 18.0 * (len(c) - 1) + 9.0 * occ_rot(c)
+            + 6.0 * (occ_row_centroid(c) - 1.0)
+            + 22.0 * (1.0 if OCC_SHAPE_I[tuple(cc for _, cc in slot_keys(c))] % 3 == 0 else 0.0))
+    jitter = 4.0 * ((sum(ord(x) for x in c) % 5) - 2)
+    return base + jitter + {"iso": -12.0, "S1": 0.0, "S3": 8.0}[role]
 
 
 def _synth_gap_true(c1, c2):
@@ -598,6 +743,51 @@ def selftest(args):
           f"散布围栏剔除整行 {s['dropped']} 行 (段级围栏 {len(s['fences'])} 个桶); "
           f"只出现在 1 击行的组合 {len(one_only)} 个")
     tr, te, msg = split_by_trial(s)
+    # (0) φ v9 自检: 维数 = 冻结 v8 + 2 / 前 8 维与 v8 **逐位一致** / 食指位镜像一致且三态齐全 /
+    #     无"同指双列"（槽 3 与槽 4 同现会让 _idx_pos 取值不唯一）
+    assert PHI_DIM == len(phi_gap_v8("a", "b")) + 2 == 10, PHI_DIM
+    for a, b in (("we", "sd"), ("rt", "tf"), ("zx", "sdf"), ("q", "hj"), ("sdf", "lkj")):
+        assert list(phi_gap(a, b))[:8] == list(phi_gap_v8(a, b)), f"v9 前 8 维 ≠ 冻结 v8: {a}→{b}"
+    for h, combos in (("l", LEFT_COMBOS), ("r", RIGHT_COMBOS)):
+        for c in combos:
+            cols = set(_slot_cols(c))
+            assert not (3 in cols and 4 in cols), f"{c}: 槽 3/4 同现（同指键区约束被违反）"
+            assert _idx_pos(c) == _idx_pos(mirror_combo(c)), f"食指位镜像不一致: {c}"
+    assert {_idx_pos(c) for c in LEFT_COMBOS} == {-1.0, 0.0, 1.0}, "食指位三态不全"
+    print(f"  ✓ φ v9（{PHI_DIM} 维 = 冻结 v8 的 8 维 + 两侧食指位）: 前 8 维逐位一致 · "
+          f"食指位镜像一致 · 三态齐全 · 无同指双列")
+    # (0b) **occ 结构先验（v10）** 自检:
+    #  ① 列形态格数 = 15（单键 5 + 双键 9 + 3键 1）且 79 组合全落在表内
+    #  ② 与 **并击公共 的 9×7 分类件**对账: 列形态 = `col_pair`、行 = `row_pair`（同一槽位序口径）
+    #  ③ (列形态, 旋转角, 行质心) ↔ (列对, 行对) 是一一对应（⇒ 结构件不丢信息、不撞格）
+    #  ④ 镜像一致（右手同一格、旋转角/行质心逐位相同）
+    #  ⑤ 未见组合**不退化成常数**（把某组合的独有列形态整格删空后再预测, 值仍随形状/行变化）
+    assert len(OCC_SHAPES) == 15 and len(OCC_SHAPE_I) == 15, len(OCC_SHAPES)
+    for hand_, combos_ in (("l", LEFT_COMBOS), ("r", RIGHT_COMBOS)):
+        for c in combos_:
+            shp = tuple(cc for _, cc in slot_keys(c))
+            assert shp in OCC_SHAPE_I, f"{c} 的列形态落在表外"
+            assert occ_rot(c) == occ_rot(mirror_combo(c)), f"旋转角镜像不一致: {c}"
+            assert occ_row_centroid(c) == occ_row_centroid(mirror_combo(c)), f"行质心不一致: {c}"
+            if len(c) == 2:
+                assert shp == col_pair(c) and _slot_rows(c) == row_pair(c), f"分类件对不上: {c}"
+    dbl_l = [c for c in LEFT_COMBOS if len(c) == 2]
+    assert len({(tuple(cc for _, cc in slot_keys(c)), occ_rot(c), occ_row_centroid(c))
+                for c in dbl_l}) == 63, "结构件撞格"
+    assert {len(tuple(cc for _, cc in slot_keys(c))) for c in LEFT_COMBOS + RIGHT_COMBOS} == {1, 2, 3}
+    assert ShrunkModel.__init__.__defaults__[1] == "struct", "v10 默认应为结构先验"
+    n_occ = 1 + len(OCC_SHAPES) + 3 + len(ROLES)        # 截距 + 列形态 15 + 几何 3 + 角色 3
+    print(f"  ✓ occ 结构先验（v10）: 列形态 {len(OCC_SHAPES)} 格（单键 5 + 双键 9 + 3键 1）· "
+          f"与 9×7 分类件对账（col_pair/row_pair）· 63 双键 (列形态,旋转角,行质心) 一一对应 · "
+          f"镜像一致 · occ 设计 {n_occ} 列（旧 onehot(组合) 口径 = {1 + len(LEFT_COMBOS) + len(ROLES)}）")
+    # (0c) **gap 侧不受 occ_prior 影响**（同划分同数据 ⇒ 两模型 gap 表逐位相同）
+    _g1 = ShrunkModel(occ_prior="struct").fit(tr["occ"], tr["gap"])
+    _g2 = ShrunkModel(occ_prior="combo").fit(tr["occ"], tr["gap"])
+    for _, a, b, _ in tr["gap"][:500]:
+        assert abs(_g1.gap(a, b) - _g2.gap(a, b)) < 1e-12, f"gap 随 occ_prior 变了: {a}→{b}"
+    assert _g1.n_par == n_occ + 1 + PHI_DIM
+    assert _g2.n_par == (1 + len(_g2.occ_combos) + 3) + 1 + PHI_DIM
+    print(f"  ✓ 接线: gap 表与 occ_prior 无关（两口径逐位相同）· 自报参数 {_g1.n_par} / {_g2.n_par}")
     # (1) 划分是 trial 级: 同一试次的段不得跨侧
     tr_rows = {i for key in ("occ", "gap", "wc") for i, *_ in tr[key]}
     te_rows = {i for key in ("occ", "gap", "wc") for i, *_ in te[key]}
@@ -620,6 +810,14 @@ def selftest(args):
             print(f"  ✓ 还原: occ 段 MAE {out['occ_seg']['mae']:.1f} (基线 "
                   f"{out['base_occ']['mae']:.1f}) | wc MAE {out['two_trial']['mae']:.1f} "
                   f"(基线 {out['base_wc']['mae']:.1f})")
+            # (3b) **nMAE 口径自检**（2026-10-13 用户「以后报告结果时同时报告 nMAE」）:
+            #      必须恒等于 MAE / mean(同集) —— 守住"同集同分母"与接线（并击公共.nmae 唯一实现）
+            for _k in ("occ_seg", "gap_seg", "one_trial", "two_trial", "wc_direct"):
+                _d = out[_k]
+                assert abs(_d["nmae"] - _d["mae"] / _d["mean"]) < 1e-12, (_k, _d)
+            print("  ✓ nMAE 口径自检: 5 个单元均 ≡ MAE / mean(同集); "
+                  + " / ".join(f"{k} {out[k]['nmae']*100:.2f}%"
+                               for k in ("occ_seg", "gap_seg", "one_trial", "two_trial")))
             # (2b) **基数共享**: 只出现在 1 击行的组合, 其 S1/S3 没有直采样本,
             # 只能靠 base(组合) 借 iso 数据 + 段位偏移推出 —— v1 角色分家时这里 = 全局中位
             errs = {}
@@ -688,6 +886,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hand", choices=["l", "r"], default="l")
     ap.add_argument("--model", choices=["shrunk", "embed"], default="shrunk")
+    ap.add_argument("--occ-prior", choices=list(OCC_PRIOR_KINDS), default=OCC_PRIOR_KINDS[0],
+                    help="occ 先验形状: struct = v10 默认（列形态+几何）/ combo = v9 冻结口径")
     ap.add_argument("--epochs", type=int, default=200)
     ap.add_argument("--full", action="store_true", help="全数据重训 + 导出产物 npz")
     ap.add_argument("--selftest", action="store_true")
@@ -703,9 +903,9 @@ def main():
     t0 = time.time()
     s = build_samples(rows, args.hand)
     tr, te, msg = split_by_trial(s)
-    model = (ShrunkModel() if args.model == "shrunk"
+    model = (ShrunkModel(occ_prior=args.occ_prior) if args.model == "shrunk"
              else EmbedModel(LEFT_COMBOS if args.hand == "l" else RIGHT_COMBOS, epochs=args.epochs,
-                             prior=ShrunkModel().fit(tr["occ"], tr["gap"])))
+                             prior=ShrunkModel(occ_prior=args.occ_prior).fit(tr["occ"], tr["gap"])))
     model.fit(tr["occ"], tr["gap"])
     out = evaluate(model, tr, te)
     report(args.hand, model, msg, out, s)
@@ -717,9 +917,9 @@ def main():
         print(f"\n⚠ 段级样本不足: {thin}/{len(keys)} 个 (组合,角色) 键样本 < {MIN_SEG_PER_KEY} "
               f"→ 主要靠收缩/先验; 当前数据量只够验证管线, 不足以定当量表")
     if args.full:
-        model_full = (ShrunkModel() if args.model == "shrunk"
+        model_full = (ShrunkModel(occ_prior=args.occ_prior) if args.model == "shrunk"
                       else EmbedModel(LEFT_COMBOS if args.hand == "l" else RIGHT_COMBOS,
-                                      prior=ShrunkModel().fit(s["occ"], s["gap"])))
+                                      prior=ShrunkModel(occ_prior=args.occ_prior).fit(s["occ"], s["gap"])))
         model_full.fit(s["occ"], s["gap"])
         export(model_full, args.hand)
     print(f"[耗时 {time.time()-t0:.1f}s]")
