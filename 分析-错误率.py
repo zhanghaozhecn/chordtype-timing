@@ -40,11 +40,11 @@ from pathlib import Path
 from collections import Counter, namedtuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import numpy as np
-from 并击公共 import (BASE, read_tsv, ROLES, LEFT_COMBOS, RIGHT_COMBOS,
+from 并击公共 import (BASE, DATA_DIR, DATA_TSV, read_tsv, ROLES, LEFT_COMBOS, RIGHT_COMBOS,
                      KEY_POS, combo_of)
 
-DATA = BASE / "当量数据.tsv"
-OUT_TXT = BASE / "数据" / "错误率表.txt"
+DATA = DATA_TSV
+OUT_TXT = DATA_DIR / "错误率表.txt"
 EVENT_MIN = 100            # 单头事件不足门禁（低于此只报计数 + provisional）
 SEED = 2024
 MECH = {"R1": "键序错误(按错键)", "R2": "失同步(散布超限)", "R3": "提前击(未全放)", "R4": "缺键"}

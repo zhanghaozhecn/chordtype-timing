@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from 并击公共 import BASE, LEFT_SET as LEFT, pct, canon   # 手别/数据目录/分位/记法 = 唯一来源
+from 并击公共 import DATA_TSV, LEFT_SET as LEFT, pct, canon   # 手别/数据落点/分位/记法 = 唯一来源
 
 def split_parts(s):
     return ''.join(c for c in s if c in LEFT), ''.join(c for c in s if c not in LEFT)
@@ -167,5 +167,5 @@ def main(path):
     print(f"\nhold 时长 lu-ld (ms): med={pct(hv,0.5):.0f}  p90={pct(hv,0.9):.0f}  max={max(hv):.0f}")
 
 if __name__ == "__main__":
-    path = sys.argv[1] if len(sys.argv) > 1 else BASE / "当量数据.tsv"
+    path = sys.argv[1] if len(sys.argv) > 1 else DATA_TSV
     main(Path(path))

@@ -385,10 +385,11 @@ from 采集核心 import (StrokeTrial, KeyboardCanvas, _hand,           # 引擎
                      app_is_foreground, claim_foreground,             # 前台自检/抢前台 (v2.37)
                      selftest as core_selftest)
 from 并击公共 import (LEFT, RIGHT, LEFT_SET, RIGHT_SET,              # 手别/键集唯一来源
-                     canon, combo_of)                              # 组合串唯一归一化 (槽位序)
+                     canon, combo_of,                               # 组合串唯一归一化 (槽位序)
+                     DATA_TSV, PRACTICE_TSV)                        # 采集数据落点唯一来源 (数据/)
 
-OUT = BASE / "当量数据.tsv"
-PRACTICE_OUT = BASE / "练习数据.tsv"
+OUT = DATA_TSV
+PRACTICE_OUT = PRACTICE_TSV
 PRACTICE_JSON = BASE / "练习进度.json"
 KEYS = LEFT_SET | RIGHT_SET  # 全键盘 30 键 (派生量)
 MIX_ONE_TWO = (1, 4)         # 混采比例 一击:二击 = 1:4 → P(1击)=1/5 (v2.34, 2026-10-11 用户决策:
@@ -2402,7 +2403,7 @@ if __name__ == "__main__":
     ap.add_argument("--smoke", action="store_true")
     ap.add_argument("--recanon", nargs="?", const="__main__", metavar="TSV",
                     help="一次性迁移: 把该 TSV 的 code 列归一化到 canonical 槽位序 "
-                         "(小指→食指; 默认 当量数据.tsv; 自动带 .pre-recanon.bak 备份, 幂等)")
+                         "(小指→食指; 默认 数据/当量数据.tsv; 自动带 .pre-recanon.bak 备份, 幂等)")
     args = ap.parse_args()
     if args.hand is not None:
         ap.error("--hand 已于 v2.23 移除: 采集手固定为『左右 1:1 随机单手』"

@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
-from 并击公共 import BASE, read_tsv, hand_segments, stable_start, stable_by_type
+from 并击公共 import DATA_TSV, PRACTICE_TSV, read_tsv, hand_segments, stable_start, stable_by_type
 
 def report(title, indicators):
     print(f"[{title}]")
@@ -27,9 +27,9 @@ def report(title, indicators):
         print(f"  {name} (n={len(vals)}, 中位 {np.median(vals):.0f}ms) {note}\n    {msg}")
 
 def main():
-    rows = read_tsv(BASE / "当量数据.tsv")
+    rows = read_tsv(DATA_TSV)
     if not rows:
-        print(f"无数据: {BASE / '当量数据.tsv'} (尚未开始采集)")
+        print(f"无数据: {DATA_TSV} (尚未开始采集)")
     for hand, name in (('l', '左手'), ('r', '右手')):
         print(f"\n═══ {name} ═══")
         # 主口径: 分类型稳定期
@@ -45,7 +45,7 @@ def main():
                     (("S1", "词首占用"), ("S2", "换手间隙"), ("S3", "词尾占用"),
                      ("wc", "= S1+S2+S3 (该类型边界指标)"))])
     # 可选: 练习模式数据 (热身; 孤立角色）
-    drill = read_tsv(BASE / "练习数据.tsv")
+    drill = read_tsv(PRACTICE_TSV)
     occ = [float(r["lu"]) - float(r["fd"]) for r in drill
            if r["error"] == "0" and float(r["lu"]) > 0]
     if occ:

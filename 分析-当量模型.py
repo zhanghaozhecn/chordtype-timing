@@ -55,9 +55,10 @@ from 并击公共 import (BASE, read_tsv, hand_segments, iso_segment, combo_of,
                      ROLES, pct, stable_by_type, stable_rows, hand_of,
                      mad_filter, LEFT_COMBOS, RIGHT_COMBOS, KEY_POS, mirror_combo,
                      slot_keys, col_pair, row_pair, nmae,
-                     COL_FINGER_L, COL_FINGER_R, POS_LV, key_onehot)
+                     COL_FINGER_L, COL_FINGER_R, POS_LV, key_onehot,
+                     DATA_TSV)
 
-DATA = BASE / "当量数据.tsv"
+DATA = DATA_TSV
 
 
 def out_npz(hand):

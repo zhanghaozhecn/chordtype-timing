@@ -9,6 +9,10 @@ import math
 import numpy as np
 
 BASE = Path(__file__).parent
+# ── 采集数据落点（唯一来源; 2026-10-16 起移入 数据/ 文件夹）─────────────────────
+DATA_DIR = BASE / "数据"
+DATA_TSV = DATA_DIR / "当量数据.tsv"        # 采集数据唯一源 (铁律 1; 22 列)
+PRACTICE_TSV = DATA_DIR / "练习数据.tsv"    # 练习模式数据 (热身; 不进模型)
 LEFT, RIGHT = 'qazwsxedcrfvtgb', 'p;/ol.ik,ujmyhn'
 LEFT_SET, RIGHT_SET = set(LEFT), set(RIGHT)
 

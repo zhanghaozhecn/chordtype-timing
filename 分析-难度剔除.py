@@ -72,6 +72,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from 并击公共 import (BASE, REF_COMBO, read_tsv, role_segments, scheme_used, stable_start, pct,
                      word_occ, LEFT_COMBOS, RIGHT_COMBOS, ROLES, canon,   # canon = 组合串唯一归一化
+                     DATA_TSV,
                      role_weights, joint_log_ratio, sigma_of_log, sigma_within_log, sigma_fallback,
                      margin_adaptive, mirror_combo, pair_id, role_ref_vals,
                      TWO_KEY_PER_HAND, SINGLES_PER_HAND, REF_MODE_DEFAULT, REF_MODES,
@@ -83,7 +84,7 @@ from 并击公共 import (BASE, REF_COMBO, read_tsv, role_segments, scheme_used,
                      SLOT_NAME, ROW_NAME, COL_PAIRS, ROW_PAIRS,
                      cell_of, cell_name, col_pair, row_pair, cell_sort_key)
 
-DATA = BASE / "当量数据.tsv"
+DATA = DATA_TSV
 EXCLUDE_TXT = BASE / "组合排除表.txt"                  # **唯一一张动作表** (v2.59: 降权表已删除)
 
 
