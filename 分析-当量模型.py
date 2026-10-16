@@ -19,9 +19,13 @@
     实现 = onehot ridge 先验 + 键级中位向先验收缩（与 gap 侧"几何 φ ridge + 收缩"同构;
     键级修正只吸收交互残差, 稀角色自动借用其它角色的样本）
   · 模型 B: gap 表 —— 预测 gap_h(c₁→c₂) = fd₂−lu₁（本征换手间隙；闸门只在合成时施加）
-  · 估计器 `shrunk`（默认，小样本稳健）: 键级中位 + 向**结构先验收缩** n/(n+m)（经验贝叶斯）
+  · 估计器 `xgb`（**v11 生产默认**, 2026-10-16 用户「把生产occ换成XGB」）: occ = XGBoost(指对+行对+
+    角色 ⊕ 键级身份 onehot 16 格)（`XGBOccModel`）, gap 不变仍 = ShrunkModel ⇒ `MixedModel` 拼装。
+    依据 = 实验-occ身份容量对照（同日）定案「真信号非容量」: 同容量随机重排对照零增益,
+    Δ(④−④p̄) l −0.66** / r −0.39**; 门禁 Δ(④−EB) l −0.58** / r −0.27**
+  · 估计器 `shrunk`（v10 对照口径，小样本稳健）: 键级中位 + 向**结构先验收缩** n/(n+m)（经验贝叶斯）
     —— occ 侧先验 = 可加模型（base+段位）, gap 侧先验 = 几何 φ ridge
-  · 估计器 `embed`（数据够时用）: 组合嵌入 + 几何 φ + MLP，固定种子 0..2 全体平均
+  · 估计器 `embed`（对照）: 组合嵌入 + 几何 φ + MLP，固定种子 0..2 全体平均
     （**不做 best-of 选优** —— 选优用验证集才有意义，固定种子平均无选优抽签噪声）
   · 合成（闸门感知，README §4.1）:
       单手表链 = occ(c₁) + gap(c₁→c₂) + occ(c₂)
@@ -38,7 +42,7 @@
   · 所有指标在**留出试次**上算；打印**划分版本**（稳定期规模/测试集/种子）以便追溯
   · torch 单线程 + manual_seed；模型随数据确定性可复现
 
-用法: python 分析-当量模型.py [--hand l|r] [--model shrunk|embed] [--epochs 200]
+用法: python 分析-当量模型.py [--hand l|r] [--model xgb|shrunk|embed] [--epochs 200]
                               [--full] [--selftest]
       --full: 全数据重训并导出 产物/当量表-并击-{l,r}.npz（**按手分文件**; version 戳；M3 组装层读）
 """
@@ -50,7 +54,8 @@ import numpy as np
 from 并击公共 import (BASE, read_tsv, hand_segments, iso_segment, combo_of,
                      ROLES, pct, stable_by_type, stable_rows, hand_of,
                      mad_filter, LEFT_COMBOS, RIGHT_COMBOS, KEY_POS, mirror_combo,
-                     slot_keys, col_pair, row_pair, nmae)
+                     slot_keys, col_pair, row_pair, nmae,
+                     COL_FINGER_L, COL_FINGER_R, POS_LV, key_onehot)
 
 DATA = BASE / "当量数据.tsv"
 
@@ -67,7 +72,15 @@ SEED = 2024                 # 固定随机流（划分与初始化；勿改，�
 SHRINK_M = 3.0              # 收缩强度 m: est = (n·键级中位 + m·全局中位)/(n+m)
 N_SEEDS = 3                 # 嵌入模型固定种子数（全体平均，无选优）
 MIN_SEG_PER_KEY = 5         # 段级样本少于此的键只靠收缩（并告警数据不足）
-MODEL_VERSION = 10          # v10: **occ 先验换结构/几何形状**（onehot(组合) → 列形态类别 15 ⊕
+MODEL_VERSION = 11          # v11: **生产 occ 估计器换 XGB**（2026-10-16 用户「把生产occ换成XGB」）
+                            #   occ = XGBoost(指对+行对+角色 ⊕ 键级身份 16 格)（`XGBOccModel`）,
+                            #   gap 不变仍 = ShrunkModel（φ ridge + 收缩）⇒ `MixedModel` 拼装。
+                            #   依据: 实验-occ身份容量对照（同日）定案**真信号非容量** —— 同容量
+                            #   随机重排对照 4 种子零增益, Δ(④−④p̄) l −0.66 [−0.92,−0.45]** /
+                            #   r −0.39 [−0.46,−0.32]**; 门禁 Δ(④−EB) l −0.58** / r −0.27**
+                            #   （此前三模型对比连续三轮 l −0.29→−0.32→−0.58 / r −0.18→−0.27）。
+                            #   旧口径对照: `--model shrunk`（= v10 双侧 EB）。
+                            # v10: **occ 先验换结构/几何形状**（onehot(组合) → 列形态类别 15 ⊕
                             #   连续几何 3, 见 `occ_struct_feat`; 2026-10-13 用户「进行改进」）。
                             #   依据: 组合级留出（= **未见组合行**, 键位重排评估场景）
                             #   列形态类别 + 连续几何 **两手 24/24 更优 −2.7…−3.2ms**, 而
@@ -537,6 +550,94 @@ class EmbedModel:
         return self.prior.gap(c1, c2) * math.exp(sum(vals) / len(vals))
 
 
+# ═══ 生产 occ 估计器（v11）: XGBoost ⊕ 键级身份（2026-10-16 用户决策）═══
+OCC_XGB_PARAMS = dict(n_estimators=200, max_depth=3, learning_rate=0.05,
+                      subsample=0.8, colsample_bytree=0.8, reg_lambda=1.0,
+                      min_child_weight=3, random_state=0, n_jobs=1,
+                      objective="reg:squarederror")   # = 实验臂 ④ 同参（FG.XGBModel）
+
+
+def finger_pair(combo, hand):
+    """组合 → 指对（按 (行, **绝对列**) 升序取指号 —— 与实验原版 FG._finger_pair 逐位同款;
+    ⚠ 不用槽位序: COL_FINGER_* 以绝对列号为键（右手 5..9）, 槽位序会 KeyError 且改变 onehot 排布）"""
+    finger = COL_FINGER_L if hand == "l" else COL_FINGER_R
+    return tuple(finger[cc] for _, cc in sorted(KEY_POS[ch] for ch in combo))
+
+
+def occ_cat_feat(hand):
+    """生产 occ 类别特征 = onehot(指对) + onehot(槽位行元组) + onehot(角色)
+    （v11 随 XGBOccModel 上移生产; 实验 FG.occ_feat_cat 委托到这里 ⇒ 口径只有一份。
+     依据 = 几何实验"指对是第一因素"+ 已证行对/角色; 键级身份块另加于 XGBOccModel._x）"""
+    combos = LEFT_COMBOS if hand == "l" else RIGHT_COMBOS
+    fpl = sorted({finger_pair(c, hand) for c in combos})
+    rwl = sorted({_slot_rows(c) for c in combos})
+    fi = {v: k for k, v in enumerate(fpl)}
+    ri = {v: k for k, v in enumerate(rwl)}
+    NF, NR = len(fpl), len(rwl)
+
+    def f(c, role, hand_=None):
+        v = [0.0] * (NF + NR + 3)
+        v[fi[finger_pair(c, hand)]] = 1.0
+        v[NF + ri[_slot_rows(c)]] = 1.0
+        v[NF + NR + ("iso", "S1", "S3").index(role)] = 1.0
+        return v
+    return f, NF + NR + 3
+
+
+class XGBOccModel:
+    """**生产 occ 估计器（v11, 2026-10-16 用户「把生产occ换成XGB」）**
+    XGBoost(指对+行对+角色 ⊕ 键级身份 onehot 16 格), 目标 = log occ（与全项目乘性口径一致）。
+    特征/超参与实验臂 ④ 逐位同款（实验-三模型对比 ARMS_OCC ④ / 实验-occ身份容量对照;
+    守卫断言挂 实验-三模型对比 --selftest: 生产 ≡ 实验臂④）。
+    依据: 实验-occ身份容量对照（2026-10-16）定案**真信号非容量** —— 同容量随机重排对照
+    4 种子零增益, Δ(④−④p̄) l −0.66 [−0.92,−0.45]** / r −0.39 [−0.46,−0.32]**;
+    门禁 Δ(④−EB) l −0.58 [−0.76,−0.40]** / r −0.27 [−0.44,−0.11]**。
+    "未见组合"行为: 身份块 = 键级位置格 onehot（并击公共.key_onehot, 镜像同构）,
+    未见组合的键格从其它组合的共键样本学得 ⇒ 天然可外推（键级分解的初衷）。
+    本类**只接管 occ**; 生产 gap 仍 = ShrunkModel ⇒ 用 `MixedModel` 拼装。"""
+    name = "xgb_occ"
+
+    def __init__(self, hand):
+        self.hand = hand
+        self.f_cat, self.n_cat = occ_cat_feat(hand)
+
+    def _x(self, c, role):
+        return list(self.f_cat(c, role, self.hand)) + key_onehot(c, self.hand, "pos")
+
+    def fit(self, occ, gap):
+        import xgboost as xgb
+        X = np.array([self._x(c, r) for _, r, c, v in occ if v > 0])
+        y = np.array([math.log(max(v, 1e-3)) for _, r, c, v in occ if v > 0])
+        self.m = xgb.XGBRegressor(**OCC_XGB_PARAMS).fit(X, y)
+        return self
+
+    def occ(self, c, role):
+        return math.exp(float(self.m.predict(np.array([self._x(c, role)]))[0]))
+
+    def gap(self, a, b):
+        raise NotImplementedError("XGBOccModel 只接管 occ; gap 用 ShrunkModel（MixedModel 拼装）")
+
+
+class MixedModel:
+    """occ / gap 异构拼装（v11 生产形态 = occ:XGBOccModel + gap:ShrunkModel;
+    实验层同构物 = 实验-手形行分解._Mixed —— 评估口径（四宫格/合成）不变, duck-typed occ/gap）"""
+    def __init__(self, occ_m, gap_m):
+        self.occ_m, self.gap_m = occ_m, gap_m
+        self.name = f"occ:{occ_m.name} + gap:{gap_m.name}"
+        self.occ_prior = None    # occ 侧不再是 EB 先验（v11）; ShrunkModel.occ_prior 只描述其内部 occ 块
+
+    def fit(self, occ, gap):
+        self.occ_m.fit(occ, gap)
+        self.gap_m.fit(occ, gap)
+        return self
+
+    def occ(self, c, role):
+        return self.occ_m.occ(c, role)
+
+    def gap(self, a, b):
+        return self.gap_m.gap(a, b)
+
+
 # ═══════════════════════ 合成与评估 ═══════════════════════
 def compose_single_hand(model, c1, c2):
     """单手表链 = occ(c₁@S1) + gap + occ(c₂@S3)（本机数据即单手, 故这条可直接验证）"""
@@ -660,6 +761,17 @@ def report(hand, model, split_msg, out, samples):
 
 
 # ═══════════════════════ 导出 ═══════════════════════
+def occ_note(model):
+    """npz meta 的 occ 侧口径说明（随估计器变: v11 XGB / v10 EB 可加结构）"""
+    if str(getattr(model, "name", "")).startswith("occ:xgb") or getattr(model, "name", "") == "xgb_occ":
+        return ("occ = lu−fd (成形占用); v11 生产估计器 = XGBoost(指对+行对+角色 ⊕ 键级身份 16 格"
+                "（并击公共.key_onehot, 镜像同构）), 目标 log occ; 未采组合靠键级身份外推 ―― "
+                "依据 实验-occ身份容量对照「真信号非容量」(2026-10-16)")
+    return ("occ = lu−fd (成形占用; 可加结构: log occ = base(组合)+offset(角色), "
+            "iso 与 S1/S3 共享基数; v10 起 base 的形状 = 列形态类别 ⊕ 连续几何 ―― "
+            "未采到的组合也能外推)")
+
+
 def export(model, hand, out_path=None):
     """产物: occ 表 (角色×组合) + gap 表 (组合×组合) + 版本戳（M3 组装层读）
     **按手分文件**（out_path=None ⇒ `产物/当量表-并击-{hand}.npz`）"""
@@ -671,9 +783,7 @@ def export(model, hand, out_path=None):
     meta = {"hand": hand, "model": model.name, "n_combos": len(combos),
             "roles": list(ROLES), "phi_dim": PHI_DIM, "shrink_m": SHRINK_M,
             "occ_prior": getattr(model, "occ_prior", None),
-            "note": "occ = lu−fd (成形占用; 可加结构: log occ = base(组合)+offset(角色), "
-                    "iso 与 S1/S3 共享基数; v10 起 base 的形状 = 列形态类别 ⊕ 连续几何 ―― "
-                    "未采到的组合也能外推); gap = fd₂−lu₁ (本征换手间隙, 闸门只在合成时施加)"}
+            "note": (occ_note(model)) + ("; gap = fd₂−lu₁ (本征换手间隙, 闸门只在合成时施加)")}
     np.savez(out_path, version=np.int64(MODEL_VERSION), combos=np.array(combos),
              occ=occ, gap=gap, meta=json.dumps(meta, ensure_ascii=False))
     print(f"\n导出 → {out_path} (version {MODEL_VERSION}, {len(combos)} 组合, "
@@ -788,6 +898,31 @@ def selftest(args):
     assert _g1.n_par == n_occ + 1 + PHI_DIM
     assert _g2.n_par == (1 + len(_g2.occ_combos) + 3) + 1 + PHI_DIM
     print(f"  ✓ 接线: gap 表与 occ_prior 无关（两口径逐位相同）· 自报参数 {_g1.n_par} / {_g2.n_par}")
+    # (0d) **键级身份编码（v11 生产 occ 的身份块; 唯一源 = 并击公共.key_onehot）**:
+    #  ① 维数 = 16（15 位置格 + EOF 位）; ② 镜像组合逐位相同（左右手同构）;
+    #  ③ 键数守恒: 前 15 格求和 = 键数, 末位 EOF 计数 = 3 − 键数
+    for hand_, combos_ in (("l", LEFT_COMBOS), ("r", RIGHT_COMBOS)):
+        for c in combos_:
+            v = key_onehot(c, hand_)
+            assert len(v) == len(POS_LV) + 1, (c, len(v))
+            assert sum(v[:-1]) == len(c) and v[-1] == 3 - len(c), (c, v)
+            assert v == key_onehot(mirror_combo(c), hand_), f"键身份镜像不一致: {c}"
+    print(f"  ✓ 键级身份编码（v11）: {len(POS_LV)} 位置格 + EOF 位 · 镜像逐位相同 · "
+          f"键数守恒（79×2 手全查）")
+    # (0e) **XGBOccModel / MixedModel（v11 生产默认）** 守卫: 特征维数 / 预测有限为正 /
+    #     MixedModel 的 gap 逐位 ≡ ShrunkModel（occ 侧换学习器不动 gap 接线）
+    _fx, _nc = occ_cat_feat("l")
+    assert len({len(_fx(c, r, "l")) for c in LEFT_COMBOS for r in ROLES}) == 1, "occ 类别特征维数不齐"
+    _xm = XGBOccModel("l")
+    assert len(_xm._x("as", "S1")) == _nc + len(POS_LV) + 1, "XGB 特征 = 类别块 ⊕ 键身份 16 格"
+    _xm.fit(tr["occ"], tr["gap"])
+    assert all(np.isfinite(_xm.occ(c, r)) and _xm.occ(c, r) > 0
+               for c in LEFT_COMBOS for r in ROLES), "XGB occ 预测应有限为正"
+    _mix = MixedModel(XGBOccModel("l"), ShrunkModel()).fit(tr["occ"], tr["gap"])
+    for _, a, b, _ in tr["gap"][:200]:
+        assert _mix.gap(a, b) == _g1.gap(a, b), f"MixedModel.gap 应逐位 ≡ ShrunkModel: {a}->{b}"
+    print(f"  ✓ XGBOccModel/MixedModel（v11）: 特征 {_nc}+{len(POS_LV) + 1} 维 · "
+          f"79×3 预测有限为正 · MixedModel.gap ≡ ShrunkModel（200 对逐位）")
     # (1) 划分是 trial 级: 同一试次的段不得跨侧
     tr_rows = {i for key in ("occ", "gap", "wc") for i, *_ in tr[key]}
     te_rows = {i for key in ("occ", "gap", "wc") for i, *_ in te[key]}
@@ -833,9 +968,9 @@ def selftest(args):
             assert out["gap_seg"]["mae"] < 1.35 * 0.8 * 15.0, out["gap_seg"]   # 嵌入模型略宽
             print(f"  ✓ 嵌入模型跑通: occ 段 MAE {out['occ_seg']['mae']:.1f}, "
                   f"gap 段 MAE {out['gap_seg']['mae']:.1f}")
-    # (4) 导出/读回
+    # (4) 导出/读回 —— 用 **v11 生产默认形态**（MixedModel: occ:XGB + gap:EB）走一遍导出路径
     tmp = BASE / "产物" / "_selftest.npz"
-    export(ShrunkModel().fit(tr["occ"], tr["gap"]), "l", tmp)
+    export(MixedModel(XGBOccModel("l"), ShrunkModel()).fit(tr["occ"], tr["gap"]), "l", tmp)
     with np.load(tmp, allow_pickle=False) as z:      # NpzFile 惰性读, 必须关闭后才能删文件
         assert int(z["version"]) == MODEL_VERSION and z["occ"].shape[0] == len(ROLES)
         assert z["occ"].shape[1] == z["gap"].shape[0] == z["gap"].shape[1]
@@ -882,12 +1017,25 @@ def _selftest_compose():
 
 
 # ═══════════════════════ 主流程 ═══════════════════════
+def build_model(kind, hand, occ_prior, epochs):
+    """模型工厂（v11）: xgb = **生产默认**（occ:XGBOccModel + gap:ShrunkModel）;
+    shrunk = v10 双侧 EB（对照口径）; embed = 嵌入残差网（数据够时的对照）"""
+    eb = ShrunkModel(occ_prior=occ_prior)
+    if kind == "xgb":
+        return MixedModel(XGBOccModel(hand), eb)
+    if kind == "shrunk":
+        return eb
+    return EmbedModel(LEFT_COMBOS if hand == "l" else RIGHT_COMBOS, epochs=epochs, prior=eb)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hand", choices=["l", "r"], default="l")
-    ap.add_argument("--model", choices=["shrunk", "embed"], default="shrunk")
+    ap.add_argument("--model", choices=["xgb", "shrunk", "embed"], default="xgb",
+                    help="xgb = v11 生产默认（occ:XGB⊕键身份 + gap:EB收缩）; "
+                         "shrunk = v10 双侧 EB（对照）; embed = 嵌入残差网（对照）")
     ap.add_argument("--occ-prior", choices=list(OCC_PRIOR_KINDS), default=OCC_PRIOR_KINDS[0],
-                    help="occ 先验形状: struct = v10 默认（列形态+几何）/ combo = v9 冻结口径")
+                    help="occ 先验形状（仅 shrunk/embed 臂的 EB 块用）: struct = v10 默认 / combo = v9 冻结")
     ap.add_argument("--epochs", type=int, default=200)
     ap.add_argument("--full", action="store_true", help="全数据重训 + 导出产物 npz")
     ap.add_argument("--selftest", action="store_true")
@@ -903,9 +1051,9 @@ def main():
     t0 = time.time()
     s = build_samples(rows, args.hand)
     tr, te, msg = split_by_trial(s)
-    model = (ShrunkModel(occ_prior=args.occ_prior) if args.model == "shrunk"
-             else EmbedModel(LEFT_COMBOS if args.hand == "l" else RIGHT_COMBOS, epochs=args.epochs,
-                             prior=ShrunkModel(occ_prior=args.occ_prior).fit(tr["occ"], tr["gap"])))
+    model = build_model(args.model, args.hand, args.occ_prior, args.epochs)
+    if args.model == "embed":
+        model.prior = ShrunkModel(occ_prior=args.occ_prior).fit(tr["occ"], tr["gap"])
     model.fit(tr["occ"], tr["gap"])
     out = evaluate(model, tr, te)
     report(args.hand, model, msg, out, s)
@@ -914,12 +1062,13 @@ def main():
         keys[(c, role)] += 1
     thin = sum(1 for k, n in keys.items() if n < MIN_SEG_PER_KEY)
     if thin:
+        how = "键级身份外推 + 收缩/先验" if args.model == "xgb" else "收缩/先验"
         print(f"\n⚠ 段级样本不足: {thin}/{len(keys)} 个 (组合,角色) 键样本 < {MIN_SEG_PER_KEY} "
-              f"→ 主要靠收缩/先验; 当前数据量只够验证管线, 不足以定当量表")
+              f"→ 主要靠{how}; 当前数据量只够验证管线, 不足以定当量表")
     if args.full:
-        model_full = (ShrunkModel(occ_prior=args.occ_prior) if args.model == "shrunk"
-                      else EmbedModel(LEFT_COMBOS if args.hand == "l" else RIGHT_COMBOS,
-                                      prior=ShrunkModel(occ_prior=args.occ_prior).fit(s["occ"], s["gap"])))
+        model_full = build_model(args.model, args.hand, args.occ_prior, args.epochs)
+        if args.model == "embed":
+            model_full.prior = ShrunkModel(occ_prior=args.occ_prior).fit(s["occ"], s["gap"])
         model_full.fit(s["occ"], s["gap"])
         export(model_full, args.hand)
     print(f"[耗时 {time.time()-t0:.1f}s]")

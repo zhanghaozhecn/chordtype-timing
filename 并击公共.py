@@ -665,6 +665,64 @@ def cell_of(hand):
     combos = LEFT_COMBOS if hand == 'l' else RIGHT_COMBOS
     return {(col_pair(c), row_pair(c)): c for c in combos if len(c) == 2}
 
+
+# ═══ 键级身份词表 + 编码（2026-10-16 自 实验/实验-键身份表示.py **上移生产**; 全项目唯一实现）═══
+# 背景: 生产 occ 估计器 v11 起 = XGB(指对+行对+角色 ⊕ 键级身份)（分析-当量模型.XGBOccModel）,
+# 发布闭合要求生产不依赖不入库的 实验/ 脚本 ⇒ 词表/编码落位本文件（口径层）。
+# 实验-键身份表示.py 保留**键嵌入网**（KeyEmbNet/KeyOccNet, torch）的唯一实现并引用此处编码。
+# 铁律（2026-10-14 用户指示）: 一切"身份/嵌入"一律**键级**; 禁整击 onehot(79)/组合嵌入。
+POS_LV = sorted({(r, cc if h == "l" else 9 - cc)
+                 for h in ("l", "r")
+                 for c in (LEFT_COMBOS if h == "l" else RIGHT_COMBOS)
+                 for r, cc in [KEY_POS[ch] for ch in c]})          # 15 格 = 3 行 × 5 槽列
+POS_I = {v: k for k, v in enumerate(POS_LV)}
+CH_LV = {h: sorted({ch for c in (LEFT_COMBOS if h == "l" else RIGHT_COMBOS) for ch in c},
+                   key=lambda ch: slot_keys(ch)[0][1]) for h in ("l", "r")}
+CH_I = {h: {v: k for k, v in enumerate(CH_LV[h])} for h in ("l", "r")}
+N_SLOT = 3                                    # 键位槽数（覆盖 3 键组合）
+
+
+def key_ids(combo, hand, idx):
+    """组合 → (3 个键位槽的词表下标, 词表行数含 EOF) —— 槽位序（= slot_keys 口径, 唯一源）
+    idx="pos": 键按 (行, 槽列) 取位置格下标 ⇒ **镜像组合的下标逐位相同**（左右手同构, 可跨手共享）;
+    idx="char": 键按字符取下标（每手一张 15 键表）。
+    不足 3 键的槽补 EOF（独立一行）—— 单键/三键因此也能用同一套槽。"""
+    keys = slot_keys(combo)
+    if idx == "pos":
+        ids = [POS_I[rc] for rc in keys]
+        nv = len(POS_LV)
+    else:
+        ids = [CH_I[hand][ch] for _, ch in
+               sorted(((cc if hand == "l" else 9 - cc), ch)
+                      for ch, (_, cc) in ((ch, KEY_POS[ch]) for ch in combo))]
+        nv = len(CH_LV[hand])
+    return ids + [nv] * (N_SLOT - len(ids)), nv + 1
+
+
+def key_onehot(combo, hand, idx="pos"):
+    """单个组合的**键身份 onehot**（击内无序: 每键一格累加）
+    idx="pos" → 15 个 (行, 槽列) 位置格（镜像组合逐位相同 ⇒ 左右手同构）; idx="char" → 该手 15 键字符。
+    **维数 = nv + 1**: 末位 = 补齐(EOF)计数（= 3 − 键数; 单键 2 / 双键 1 / 三键 0）
+    —— 与旧口径逐位一致（该信息本就与 φ 的列数对冗余, 不构成新信息）。
+    用途: 生产 occ XGB 的身份块（v11）+ 实验树臂/线性臂身份编码（唯一实现）。"""
+    ids, nv = key_ids(combo, hand, idx)
+    v = [0.0] * nv
+    for i in ids:
+        v[i] += 1.0
+    return v
+
+
+def key_onehot_split(a, b, hand, idx="pos"):
+    """两击各自的键身份 onehot **拼接**（击内无序 + 击序保留 —— 击序是时间序）
+    = key_onehot(a) ⊕ key_onehot(b)。线性臂与树臂的**唯一**两击身份编码。"""
+    return key_onehot(a, hand, idx) + key_onehot(b, hand, idx)
+
+
+def key_onehot_pooled(a, b, hand, idx="pos"):
+    """两击合并的键身份 onehot（逐元素相加, 击序也丢掉）—— 只作对照/复现旧线性臂写法"""
+    x, y = key_onehot(a, hand, idx), key_onehot(b, hand, idx)
+    return [u + v for u, v in zip(x, y)]
+
 def selftest_layout():
     """键盘布局自测 (2026-10-13 加, 顺手补的守卫): ROWS = 三行标准布局 + KEY_POS 与之一致 + 30 键 + 键集分半
 
